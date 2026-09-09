@@ -1,5 +1,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import {
+  BUNDLE_CONTENT_TYPE,
+  BUNDLE_LIMITS,
+  BUNDLE_PROTOCOL,
+  buildBundle,
+  isTextPath,
+  looksBinary,
+  normalizeBundlePath,
+  serializeBundle,
+  type BundleEntryInput,
+} from '../shared/bundle.js';
 import { decryptHandoff, DEFAULT_ITERATIONS, encryptHandoff } from '../shared/handoff-crypto.js';
 import { LIMITS } from '../shared/types.js';
 import { fetchEnvelope, pushEnvelope } from './api.js';
@@ -30,14 +41,16 @@ function usage(): never {
   console.log(`agent-bridge CLI v${VERSION} — 零知识临时交接通道
 
 用法：
-  bridge push  [file] [--ttl <秒>] [--iterations <次>] [--copy] [--allow-secrets "<理由>"]
-      加密并上传交接文档，输出 URL + 临时密码（默认 TTL 300 秒）。
-      不指定文件时依次查找 .ai/HANDOFF.md、HANDOFF.md。
-      上传前强制经过 Context Firewall（路径策略 / 凭据扫描 / 熵异常）。
-      命中 block 级发现时必须提供豁免理由，理由会显示在推送结果里。
-      --iterations 覆盖 PBKDF2 迭代次数（默认 600000，范围 100000~2000000）。
+  bridge push  <file...> [--prompt "<请求>"] [--notes "<说明>"] [--ttl <秒>] [--copy] [--allow-secrets "<理由>"]
+      单个 markdown 文件且不带 --prompt：HANDOFF 模式（简单状态同步）。
+      多个文件、或带 --prompt：Context Bundle 模式——原始文件原样传输，
+      远端 Agent 自己阅读建立理解。文本文件之外会被自动剔除（无豁免）。
 
-  bridge check [file]
+      示例：
+        bridge push HANDOFF.md
+        bridge push AGENTS.md README.md docs/architecture.md --prompt "review 当前架构"
+
+  bridge check <file...>
       只运行 Context Firewall 并输出报告，不上传（退出码 0/2）。
 
   bridge config --url <https://...> --token <UPLOAD_TOKEN>
@@ -62,7 +75,7 @@ function parseFlags(args: string[]): { positional: string[]; flags: Map<string, 
     const a = args[i] ?? '';
     if (a === '--copy') {
       flags.set(a, true);
-    } else if (a === '--ttl' || a === '--iterations' || a === '--allow-secrets') {
+    } else if (a === '--ttl' || a === '--iterations' || a === '--allow-secrets' || a === '--prompt' || a === '--notes') {
       const v = args[++i];
       if (v === undefined) fail(`${a} 需要一个参数`);
       flags.set(a, v);
@@ -79,22 +92,39 @@ function contentTypeFor(file: string): string {
   return CONTENT_TYPES[path.extname(file).toLowerCase()] ?? 'application/octet-stream';
 }
 
-function resolveInputFile(positional: string[]): string {
-  if (positional.length > 1) fail('一次只能推送一个文件');
-  if (positional.length === 1) {
-    const f = positional[0] as string;
-    if (!fs.existsSync(f)) fail(`文件不存在：${f}`);
-    return f;
+function resolveInputFiles(positional: string[]): string[] {
+  if (positional.length > 0) {
+    const unique = [...new Set(positional)];
+    for (const f of unique) {
+      if (!fs.existsSync(f)) fail(`文件不存在：${f}`);
+      if (!fs.statSync(f).isFile()) fail(`不是普通文件：${f}`);
+    }
+    return unique;
   }
   for (const candidate of DEFAULT_HANDOFF_CANDIDATES) {
-    if (fs.existsSync(candidate)) return candidate;
+    if (fs.existsSync(candidate)) return [candidate];
   }
   fail('未指定文件，且当前目录找不到 .ai/HANDOFF.md 或 HANDOFF.md');
 }
 
+/** Path stored inside the bundle: repo-relative when given, basename for absolute inputs. */
+function bundlePathFor(file: string): string {
+  if (path.isAbsolute(file)) return path.basename(file);
+  return normalizeBundlePath(file);
+}
+
 async function push(args: string[]): Promise<void> {
   const { positional, flags } = parseFlags(args);
-  const file = resolveInputFile(positional);
+  const files = resolveInputFiles(positional);
+  const prompt = flags.has('--prompt') ? String(flags.get('--prompt')).trim() : '';
+  const notes = flags.has('--notes') ? String(flags.get('--notes')).trim() : '';
+  const isBundle = files.length > 1 || prompt !== '' || notes !== '';
+  if (isBundle) {
+    return bundlePush(files, { prompt, notes, flags });
+  }
+
+  // ---- legacy single-document handoff mode (unchanged semantics) ----
+  const file = files[0] as string;
   const plaintext = fs.readFileSync(file, 'utf8');
 
   const byteLength = Buffer.byteLength(plaintext, 'utf8');
@@ -199,6 +229,164 @@ ${snippet}
   }
 }
 
+interface BundlePushOptions {
+  prompt: string;
+  notes: string;
+  flags: Map<string, string | boolean>;
+}
+
+function humanSize(bytes: number): string {
+  return bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${bytes} B`;
+}
+
+/**
+ * Multi-file Context Bundle mode. Original files travel verbatim; the local
+ * agent's job is retrieval (which files) + a short request, never
+ * interpretation. Firewall-blocked files are dropped unconditionally — the
+ * Bridge decides what must never travel, and bundle mode has no override.
+ */
+async function bundlePush(fileList: string[], opts: BundlePushOptions): Promise<void> {
+  const { flags } = opts;
+  if (fileList.length > BUNDLE_LIMITS.maxFiles) {
+    fail(`文件数超过上限（${BUNDLE_LIMITS.maxFiles}）`);
+  }
+  if (flags.has('--allow-secrets')) {
+    console.log('ℹ️ Bundle 模式下防火墙拒绝的文件会被直接剔除（无豁免通道），--allow-secrets 未被使用。');
+  }
+
+  const entries: BundleEntryInput[] = [];
+  const dropped: string[] = [];
+  let totalBytes = 0;
+
+  for (const file of fileList) {
+    const bytes = fs.readFileSync(file);
+    if (bytes.length > BUNDLE_LIMITS.maxFileBytes) {
+      console.log(`✗ ${file}：${humanSize(bytes.length)} 超过单文件上限 ${humanSize(BUNDLE_LIMITS.maxFileBytes)}，已剔除`);
+      dropped.push(file);
+      continue;
+    }
+    if (looksBinary(bytes)) {
+      console.log(`✗ ${file}：二进制文件（Bundle V1 仅支持纯文本），已剔除`);
+      dropped.push(file);
+      continue;
+    }
+    if (!isTextPath(file)) {
+      console.log(`✗ ${file}：非文本扩展名（Bundle V1 仅支持纯文本），已剔除`);
+      dropped.push(file);
+      continue;
+    }
+    const text = bytes.toString('utf8');
+    const bPath = bundlePathFor(file);
+    const report = runFirewall(file, text);
+    if (report.blocked) {
+      console.log(`✗ ${file}：被 Context Firewall 拒绝，已剔除`);
+      for (const f of report.contentFindings.filter((x) => x.severity === 'block').slice(0, 5)) {
+        console.log(`    第 ${f.line} 行：${f.rule}`);
+      }
+      if (report.pathFinding) console.log(`    ${report.pathFinding.rule}`);
+      dropped.push(file);
+      continue;
+    }
+    const warns = report.contentFindings.filter((x) => x.severity === 'warn');
+    console.log(`✓ ${bPath}（${humanSize(bytes.length)}）${warns.length > 0 ? ` ⚠️ ${warns.length} 条告警` : ''}`);
+    entries.push({ path: bPath, text });
+    totalBytes += bytes.length;
+  }
+
+  if (entries.length === 0) fail('所有文件都被剔除，没有可推送的内容');
+  if (totalBytes > LIMITS.maxBundleBytes) {
+    fail(`Bundle 总大小 ${totalBytes} 字节超过上限 ${LIMITS.maxBundleBytes}`);
+  }
+  if (dropped.length > 0) {
+    console.log(`🛡 已剔除 ${dropped.length} 个文件：${dropped.join('、')}`);
+  }
+
+  const cfg = loadBridgeConfig();
+  if (!cfg.baseUrl || !cfg.uploadToken) {
+    fail(
+      `缺少 Bridge 配置。请先执行：\n` +
+        `  bridge config --url https://<worker-domain> --token <UPLOAD_TOKEN>\n` +
+        `或设置环境变量 BRIDGE_URL / BRIDGE_TOKEN。`,
+    );
+  }
+
+  const ttl = flags.has('--ttl') ? parseInt(String(flags.get('--ttl')), 10) : LIMITS.defaultTtlSeconds;
+  if (!Number.isInteger(ttl) || ttl < LIMITS.minTtlSeconds || ttl > LIMITS.maxTtlSeconds) {
+    fail(`--ttl 必须是 ${LIMITS.minTtlSeconds}~${LIMITS.maxTtlSeconds} 之间的整数秒`);
+  }
+  const iterations = flags.has('--iterations')
+    ? parseInt(String(flags.get('--iterations')), 10)
+    : DEFAULT_ITERATIONS;
+  if (!Number.isInteger(iterations)) fail('--iterations 必须是整数');
+
+  const bundle = await buildBundle(entries, {
+    prompt: opts.prompt,
+    notes: opts.notes || undefined,
+    generator: `agent-bridge-cli/${VERSION}`,
+  });
+  const serialized = serializeBundle(bundle);
+
+  process.stdout.write(`🔐 加密 Bundle（${bundle.files.length} 个文件，${humanSize(totalBytes)}）…\n`);
+  const { secret, envelope } = await encryptHandoff(serialized, {
+    contentType: BUNDLE_CONTENT_TYPE,
+    iterations,
+  });
+
+  const created = await pushEnvelope(cfg.baseUrl, cfg.uploadToken, {
+    ...envelope,
+    expires_in: ttl,
+  });
+
+  let verified = false;
+  try {
+    const back = await fetchEnvelope(cfg.baseUrl, created.id);
+    if (back.status === 200 && back.envelope) {
+      const roundtrip = await decryptHandoff(back.envelope, secret);
+      const parsed = JSON.parse(roundtrip) as { protocol?: string; files?: Array<{ path: string; sha256: string }> };
+      verified =
+        parsed.protocol === BUNDLE_PROTOCOL &&
+        parsed.files?.length === bundle.files.length &&
+        bundle.files.every((f) =>
+          parsed.files?.some((p) => p.path === f.path && p.sha256 === f.sha256),
+        );
+    }
+  } catch {
+    verified = false;
+  }
+  if (!verified) {
+    fail('上传后回读验证失败——请勿分享此链接，请重试或检查服务端。');
+  }
+
+  const expiresLocal = new Date(created.expires_at).toLocaleString('zh-CN', { hour12: false });
+  const snippet = [
+    '继续这个项目：',
+    created.url,
+    `密码：${secret}`,
+    `（${Math.round(ttl / 60)} 分钟内有效）`,
+  ].join('\n');
+
+  console.log(`
+Context Bundle ready ✅（${bundle.files.length} 个文件，共 ${humanSize(totalBytes)}，已回读解密校验）
+Request: ${opts.prompt || '（未提供——建议附一句你想让对方解决什么）'}
+URL:      ${created.url}
+API:      ${created.api_url}
+Password: ${secret}
+Expires:  ${created.expires_at}（本地 ${expiresLocal}）
+
+复制给 ChatGPT：
+----------------------------------------
+${snippet}
+----------------------------------------`);
+
+  if (flags.has('--copy')) {
+    if (copyToClipboard(snippet)) {
+      console.log('📋 交接信息已复制到剪贴板。');
+    } else {
+      console.error('⚠️ 剪贴板工具不可用，请手动复制上面四行。');
+    }
+  }
+}
+
 function configCmd(args: string[]): void {
   let url: string | undefined;
   let token: string | undefined;
@@ -216,11 +404,15 @@ function configCmd(args: string[]): void {
 
 function checkCmd(args: string[]): void {
   const { positional } = parseFlags(args);
-  const file = resolveInputFile(positional);
-  const plaintext = fs.readFileSync(file, 'utf8');
-  const report = runFirewall(file, plaintext);
-  printReport(report);
-  process.exit(report.blocked ? 2 : 0);
+  const files = resolveInputFiles(positional);
+  let blocked = false;
+  for (const file of files) {
+    const plaintext = fs.readFileSync(file, 'utf8');
+    const report = runFirewall(file, plaintext);
+    printReport(report);
+    if (report.blocked) blocked = true;
+  }
+  process.exit(blocked ? 2 : 0);
 }
 
 async function main(): Promise<void> {

@@ -167,12 +167,21 @@ bridge push                    # 推送 .ai/HANDOFF.md 或 HANDOFF.md（任意�
 bridge push path/to/file.md    # 推送指定文件
 bridge push --ttl 120 --copy   # 自定义 TTL + 把交接四行写进剪贴板
 bridge push --iterations 300000  # 覆盖 PBKDF2 迭代次数（默认 600000）
+bridge push AGENTS.md README.md docs/architecture.md \
+  --prompt "review 当前架构"      # 多文件 → Context Bundle 模式
 bridge check path/to/file.md   # 只跑 Context Firewall 出报告，不上传
 bridge config --url https://... --token ...   # 重新配置（或用 BRIDGE_URL/BRIDGE_TOKEN 环境变量）
 ```
 
-`push` 的完整动作：读文件 → 2MB 检查 → **密钥扫描** → 生成 160-bit 密码 → 加密 → 上传 →
+`push` 的完整动作：读文件 → 防火墙 → 生成 160-bit 密码 → 加密 → 上传 →
 **立即公网回读并本地解密验证** → 打印四行交接文本。
+
+### Context Bundle（多文件模式）
+
+传多个文件或带 `--prompt` 即进入 Bundle 模式：**原始文件原样传输**，本地 Agent 只做
+"选文件 + 写一句请求"，不做有损总结；解密后是结构化 JSON（`files[].path/media_type/
+size/sha256/content`），远端 Agent 直接阅读原文。二进制或被防火墙拒绝的文件会被
+**无条件剔除（Bundle 模式无豁免）**；单文件且无 `--prompt` 时保持原 HANDOFF 模式。
 
 给本地 Agent 的固定工作流（可写进 AGENTS.md）：
 

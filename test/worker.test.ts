@@ -147,7 +147,7 @@ describe('worker', () => {
         headers: { Authorization: 'Bearer ' + TOKEN },
         body: JSON.stringify({
           ...envelope,
-          ciphertext: bytesToBase64(new Uint8Array(2_300_000)),
+          ciphertext: bytesToBase64(new Uint8Array(4_600_000)),
           expires_in: 300,
         }),
       }),

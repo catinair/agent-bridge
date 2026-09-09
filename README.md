@@ -115,6 +115,26 @@ bridge check path/to/file.md      # run the Context Firewall only, no upload
 bridge config --url https://… --token …   # reconfigure
 ```
 
+### Context Bundles (multi-file)
+
+Pass several files — or add `--prompt` — and push switches to **bundle
+mode**: original files travel verbatim (no lossy summarization by the local
+agent), with a short request explaining what the receiving agent should
+figure out:
+
+```bash
+bridge push AGENTS.md README.md docs/architecture.md \
+  --prompt "Review the current architecture" \
+  --notes "architecture.md is the core doc; models.yaml is the live config"
+```
+
+The decrypted payload is structured JSON (`files[].path/media_type/size/
+sha256/content`) — the receiver reads it directly, no ZIP, no filesystem.
+Text files only in V1; anything binary or firewall-blocked is **dropped
+unconditionally** (bundle mode has no override — the Bridge decides what must
+never travel). Single-file pushes without `--prompt` keep the original
+HANDOFF-document behavior.
+
 `push` reads the file → runs the Context Firewall → generates a 160-bit
 secret → encrypts → uploads → **fetches the public ciphertext back and
 decrypts it locally** to prove the chain works → prints the four-line handoff
@@ -133,7 +153,11 @@ type:
    href="https://…/v1/handoffs/<id>">Agent-readable encrypted JSON</a>
 ```
 
-`GET /v1/handoffs/<id>` returns the envelope:
+`GET /v1/handoffs/<id>` returns the envelope. For bundles
+(`content_type: application/vnd.agent-context-bundle+json`) the decrypted
+plaintext is itself JSON: `{ protocol: "agent-context-bundle", version: 1,
+request: { prompt }, files: [{ path, media_type, size, sha256, content }] }` —
+read the originals directly from `files[].content`.
 
 ```json
 {

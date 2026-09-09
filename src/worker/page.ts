@@ -110,6 +110,15 @@ const VIEWER_PAGE_HTML = `<!doctype html>
   .agent-link { margin-top: 1.5rem; font-size: 0.78rem; color: #8b93a3; }
   .agent-link a { color: #8b93a3; }
   .hint { color: #8b93a3; font-size: 0.78rem; margin-top: 1.25rem; line-height: 1.5; }
+  .request { margin: 1.25rem 0 0; padding: 0.9rem 1rem; background: #10141c;
+             border: 1px solid #2c3a56; border-radius: 8px; font-size: 0.9rem;
+             white-space: pre-wrap; word-break: break-word; line-height: 1.55; }
+  .bundle-files { margin-top: 0.75rem; }
+  details { margin: 0.5rem 0; border: 1px solid #262c38; border-radius: 8px; background: #0f1115; }
+  summary { cursor: pointer; padding: 0.55rem 0.8rem; font-size: 0.85rem; color: #c7cdd8; }
+  details pre { display: block; margin: 0; padding: 0.85rem 1rem; background: #0f1115;
+                border: 0; border-top: 1px solid #262c38; border-radius: 0 0 8px 8px;
+                max-height: 50vh; }
 </style>
 </head>
 <body>
@@ -178,24 +187,73 @@ const bridgeDecrypt = ${DECRYPT_FN_SOURCE};
     try {
       var t0 = Date.now();
       var plain = await bridgeDecrypt(envelope, secret);
-      elContent.textContent = plain;
-      elContent.style.display = 'block';
+      var isBundle = (envelope.content_type || '').indexOf('agent-context-bundle') >= 0;
+      if (isBundle) {
+        renderBundle(JSON.parse(plain), plain);
+      } else {
+        elContent.textContent = plain;
+        elContent.style.display = 'block';
+        addCopyButton(plain, '复制全文');
+      }
       elMeta.style.display = 'block';
       countdown();
       say('✅ 解密成功（' + ((Date.now() - t0) / 1000).toFixed(1) + 's）。');
-      var copy = document.createElement('button');
-      copy.textContent = '复制全文';
-      copy.className = 'secondary';
-      copy.style.marginTop = '0.75rem';
-      copy.onclick = function () {
-        navigator.clipboard.writeText(plain).then(function () { copy.textContent = '已复制'; });
-      };
-      elMeta.parentNode.insertBefore(copy, elMeta);
     } catch (e) {
       say('❌ ' + (e && e.message ? e.message : '解密失败'), 'err');
       elPwd.disabled = false; elPwd.select(); elPwd.focus();
     }
     elOpen.disabled = false;
+  }
+
+  function addCopyButton(text, label) {
+    var copy = document.createElement('button');
+    copy.textContent = label;
+    copy.className = 'secondary';
+    copy.style.marginTop = '0.75rem';
+    copy.onclick = function () {
+      navigator.clipboard.writeText(text).then(function () { copy.textContent = '已复制'; });
+    };
+    elMeta.parentNode.insertBefore(copy, elMeta);
+    return copy;
+  }
+
+  function renderBundle(bundle, rawPlain) {
+    var wrap = document.createElement('div');
+    var prompt = bundle.request && bundle.request.prompt ? bundle.request.prompt : '';
+    if (prompt) {
+      var req = document.createElement('div');
+      req.className = 'request';
+      req.textContent = '🎯 本次请求：' + prompt;
+      wrap.appendChild(req);
+    }
+    var list = document.createElement('div');
+    list.className = 'bundle-files';
+    var files = bundle.files || [];
+    for (var i = 0; i < files.length; i++) {
+      var f = files[i];
+      var d = document.createElement('details');
+      if (i === 0) d.open = true;
+      var s = document.createElement('summary');
+      s.textContent = '📄 ' + f.path + '  ·  ' + f.size + ' B  ·  ' + (f.media_type || '');
+      d.appendChild(s);
+      var pre = document.createElement('pre');
+      pre.textContent = f.content;
+      d.appendChild(pre);
+      var btn = document.createElement('button');
+      btn.textContent = '复制此文件';
+      btn.className = 'secondary';
+      btn.style.margin = '0.5rem 0.8rem 0.8rem';
+      (function (content, b) {
+        b.onclick = function () {
+          navigator.clipboard.writeText(content).then(function () { b.textContent = '已复制'; });
+        };
+      })(f.content, btn);
+      d.appendChild(btn);
+      list.appendChild(d);
+    }
+    wrap.appendChild(list);
+    addCopyButton(rawPlain, '复制完整 Bundle JSON');
+    elMeta.parentNode.insertBefore(wrap, elMeta);
   }
 
   elOpen.addEventListener('click', open);

@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.1.0 — 2026-09-09
+
+- **Context Bundles**: multi-file pushes where original files travel verbatim
+  plus a short `--prompt` / `--notes`; decrypted payload is structured JSON
+  (`application/vnd.agent-context-bundle+json`), no ZIP, no filesystem needed
+  on the receiving side. Text files only in V1
+- Bundle-aware Context Firewall: every file is checked (path policy +
+  credential scan + binary/extension detection); blocked files are dropped
+  **unconditionally** — bundle mode has no override
+- Viewer page renders bundles structurally: request block + per-file
+  collapsible sections with individual copy buttons
+- Server limits raised for bundles (4 MB plaintext, 4.4 MB ciphertext cap);
+  single-document mode unchanged (2 MB)
+- CLI: `--prompt` / `--notes` flags; `check` accepts multiple files;
+  `--iterations` is now actually wired to the KDF (was parsed and ignored)
+
 ## 1.0.0 — 2026-09-09
 
 First public release.

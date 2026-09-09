@@ -127,4 +127,58 @@ describe('end-to-end: CLI -> worker -> retrieval -> decryption', () => {
     await server.kv.put('h:' + id, JSON.stringify(stored));
     expect((await fetch(api)).status).toBe(404);
   }, 90_000);
+
+  it('pushes multi-file Context Bundles: originals travel verbatim, blocked files dropped', async () => {
+    const agentsMd = path.join(workdir, 'AGENTS.md');
+    const modelsYaml = path.join(workdir, 'models.yaml');
+    const notesTxt = path.join(workdir, 'notes.txt');
+    const envFile = path.join(workdir, '.env');
+    const pngFile = path.join(workdir, 'logo.png');
+    writeFileSync(agentsMd, '# Agent 规则\n优先阅读本文件。\n');
+    writeFileSync(modelsYaml, 'routing:\n  default: gpt-5-mini\n');
+    writeFileSync(notesTxt, '普通文本文件\n');
+    writeFileSync(envFile, 'API_KEY=secret-value-123\n');
+    writeFileSync(pngFile, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01]));
+
+    const result = await run(
+      [
+        'push',
+        agentsMd,
+        modelsYaml,
+        notesTxt,
+        envFile,
+        pngFile,
+        '--prompt',
+        '当前模型路由设计是否过度设计？请阅读原始文件后判断。',
+      ],
+      BRIDGE_ENV(),
+    );
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain('Context Bundle ready');
+    expect(result.stdout).toContain('当前模型路由设计是否过度设计');
+    // firewall drops the credential file and the binary, keeps the text files
+    expect(result.stdout).toContain('✓ AGENTS.md');
+    expect(result.stdout).toContain('✗ ' + envFile);
+    expect(result.stdout).toContain('✗ ' + pngFile);
+    expect(result.stdout).toContain('已剔除 2 个文件');
+
+    const { api, password } = parseHandoff(result.stdout);
+    const res = await fetch(api);
+    expect(res.status).toBe(200);
+    const envelope = (await res.json()) as Parameters<typeof decryptHandoff>[0];
+    expect(envelope.content_type).toBe('application/vnd.agent-context-bundle+json');
+
+    const bundle = JSON.parse(await decryptHandoff(envelope, password)) as {
+      protocol: string;
+      request: { prompt: string };
+      files: Array<{ path: string; content: string; media_type: string }>;
+    };
+    expect(bundle.protocol).toBe('agent-context-bundle');
+    expect(bundle.request.prompt).toContain('过度设计');
+    expect(bundle.files).toHaveLength(3);
+    const agents = bundle.files.find((f) => f.path.endsWith('AGENTS.md'));
+    expect(agents?.content).toContain('优先阅读本文件');
+    expect(agents?.media_type).toBe('text/markdown');
+    expect(bundle.files.some((f) => f.path.includes('.env'))).toBe(false);
+  }, 90_000);
 });

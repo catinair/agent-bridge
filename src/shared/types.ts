@@ -48,12 +48,14 @@ export const LIMITS = {
   minTtlSeconds: 60,
   maxTtlSeconds: 3600,
   defaultTtlSeconds: 300,
-  /** plaintext cap enforced client-side before encryption */
+  /** single-document plaintext cap enforced client-side before encryption */
   maxPlaintextBytes: 2_000_000,
-  /** ciphertext cap accepted by the server (plaintext + GCM tag headroom) */
-  maxCiphertextBytes: 2_200_000,
-  /** raw POST body cap */
-  maxEnvelopeJsonBytes: 4_000_000,
+  /** context-bundle total plaintext cap enforced client-side */
+  maxBundleBytes: 4_000_000,
+  /** ciphertext cap accepted by the server (largest plaintext mode + GCM tag headroom) */
+  maxCiphertextBytes: 4_400_000,
+  /** raw POST body cap (base64 inflation of the largest ciphertext + JSON) */
+  maxEnvelopeJsonBytes: 8_000_000,
   minIterations: 100_000,
   maxIterations: 2_000_000,
 } as const;
