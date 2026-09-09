@@ -86,8 +86,10 @@ const BURN_TOMBSTONE_PREFIX = 'b:';
 const BURN_TOMBSTONE_TTL = 86_400;
 
 function leaseSeconds(env: Env): number {
-  const parsed = parseInt(env.READ_LEASE_SECONDS ?? '60', 10);
-  if (!Number.isFinite(parsed)) return 60;
+  // default 3 minutes — long enough for a remote agent to consume several
+  // files after claiming; configurable via READ_LEASE_SECONDS
+  const parsed = parseInt(env.READ_LEASE_SECONDS ?? '180', 10);
+  if (!Number.isFinite(parsed)) return 180;
   return Math.min(3600, Math.max(30, parsed));
 }
 

@@ -46,7 +46,8 @@
 2. **notes 结构**：V1 为自由文本字符串，未做 `file_relationships[]` 结构化（规格为建议结构；协议版本化后可演进）。
 3. **`secret_normalization` 取值**：`strip-hyphens-whitespace-uppercase`（比规格示例更精确）。
 4. **`bridge handoff` 子命令**：以 Agent 工作流（skill 文档）形式存在，CLI 不内置自动检索。
-5. **read lease**：固定 60s（可配 30–3600），不做滑动延长——保证确定的 burn 期限。
+5. **read lease**：默认 **180 秒（3 分钟）**，经 `READ_LEASE_SECONDS` 可配（30–3600），
+   不做滑动延长——保证确定的 burn 期限。60s 版本经真实 ChatGPT 多文件消费实测过短。
 
 ## P1 遗留（不阻塞开源）
 

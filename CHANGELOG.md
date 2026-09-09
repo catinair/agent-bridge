@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.4.2 — 2026-09-09
+
+- **Read lease widened to 3 minutes** (default 180s, configurable 30–3600 via
+  `READ_LEASE_SECONDS`) after a real ChatGPT multi-file consumption session
+  hit 410 Gone mid-review with the previous 60s lease. Lifecycle semantics
+  unchanged: first manifest/object read claims, in-lease reads are
+  repeatable, lease end burns the whole bundle
+- **AAD V1 design frozen** after external verification: a black-box consumer
+  decrypted the manifest strictly following the envelope's self-description
+  (confirmed by real ChatGPT retrieval)
+
 ## 1.4.1 — 2026-09-09
 
 - **Fix: manifest text envelope declared the wrong AAD** for the manifest

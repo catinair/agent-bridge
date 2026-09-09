@@ -118,29 +118,41 @@ describe('end-to-end: CLI -> worker -> retrieval -> decryption', () => {
   });
 
   it('lifecycle over real HTTP: claim, in-lease reads, burn (410), status', async () => {
-    const { result } = await pushFile('LIFE.md', 'life cycle', ['--ttl', '300']);
-    expect(result.code).toBe(0);
-    const { api } = parseHandoff(result.stdout);
+    // dedicated short-lease server so the test can cross the deadline quickly
+    const leaseServer = await startDevServer({ leaseSeconds: 2 });
+    try {
+      const base = `http://127.0.0.1:${leaseServer.port}`;
+      const file = path.join(workdir, 'LIFE.md');
+      writeFileSync(file, 'life cycle');
+      const result = await run(['push', file, '--ttl', '300'], {
+        BRIDGE_URL: base,
+        BRIDGE_TOKEN: leaseServer.token,
+      });
+      expect(result.code).toBe(0);
+      const { api } = parseHandoff(result.stdout);
 
-    // sender token reads (CLI verify) must not have claimed it
-    let st = await (await fetch(api + '/status')).json();
-    expect(st.status).toBe('unclaimed');
+      // sender token reads (CLI verify) must not have claimed it
+      let st = await (await fetch(api + '/status')).json();
+      expect(st.status).toBe('unclaimed');
 
-    // recipient claims by reading
-    expect((await fetch(api)).status).toBe(200);
-    st = await (await fetch(api + '/status')).json();
-    expect(st.status).toBe('claimed');
-    expect(st.lease_remaining_seconds).toBeGreaterThan(0);
+      // recipient claims by reading
+      expect((await fetch(api)).status).toBe(200);
+      st = await (await fetch(api + '/status')).json();
+      expect(st.status).toBe('claimed');
+      expect(st.lease_remaining_seconds).toBeGreaterThan(0);
 
-    // simulate lease expiry through the KV mock, then expect 410 burned
-    const id = api.split('/').pop() as string;
-    const stored = JSON.parse((await server.kv.get('h:' + id)) as string) as { claimed_at: string };
-    stored.claimed_at = new Date(Date.now() - 61_000).toISOString();
-    await server.kv.put('h:' + id, JSON.stringify(stored));
-    const after = await fetch(api);
-    expect(after.status).toBe(410);
-    st = await (await fetch(api + '/status')).json();
-    expect(st.status).toBe('burned');
+      // age the claim past the lease, then expect 410 burned
+      const id = api.split('/').pop() as string;
+      const stored = JSON.parse((await leaseServer.kv.get('h:' + id)) as string) as { claimed_at: string };
+      stored.claimed_at = new Date(Date.now() - 31_000).toISOString();
+      await leaseServer.kv.put('h:' + id, JSON.stringify(stored));
+      const after = await fetch(api);
+      expect(after.status).toBe(410);
+      st = await (await fetch(api + '/status')).json();
+      expect(st.status).toBe('burned');
+    } finally {
+      await leaseServer.close();
+    }
   }, 90_000);
 
   it('honours short TTL expiry through the KV layer', async () => {

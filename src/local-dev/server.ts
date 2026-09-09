@@ -16,10 +16,16 @@ export interface DevServer {
   close(): Promise<void>;
 }
 
-export async function startDevServer(opts: { token?: string } = {}): Promise<DevServer> {
+export async function startDevServer(
+  opts: { token?: string; leaseSeconds?: number } = {},
+): Promise<DevServer> {
   const token = opts.token ?? crypto.randomUUID().replace(/-/g, '');
   const kv = new InMemoryKV();
-  const env: Env = { HANDOFFS: kv, BRIDGE_UPLOAD_TOKEN: token };
+  const env: Env = {
+    HANDOFFS: kv,
+    BRIDGE_UPLOAD_TOKEN: token,
+    ...(opts.leaseSeconds ? { READ_LEASE_SECONDS: String(opts.leaseSeconds) } : {}),
+  };
 
   const server = http.createServer((req, res) => {
     void handle(req, res).catch((err: unknown) => {

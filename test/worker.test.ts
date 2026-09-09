@@ -280,7 +280,24 @@ describe('worker', () => {
   });
 
   it('lifecycle: anonymous read claims; lease expiry burns (410) with tombstone', async () => {
-    const created = await createHandoff(env);
+    const leaseEnv: Env = { ...env, READ_LEASE_SECONDS: '30' }; // 30s lease, crosses at 31s
+    const created = await worker.fetch(
+      req('/v1/handoffs', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          protocol: 'agent-handoff', v: 1,
+          algorithm: 'AES-256-GCM', kdf: 'PBKDF2-SHA256', iterations: 600_000,
+          salt: bytesToBase64(new Uint8Array(16).fill(3)),
+          iv: bytesToBase64(new Uint8Array(12).fill(4)),
+          ciphertext: bytesToBase64(new Uint8Array(32).fill(5)),
+          content_type: 'text/markdown',
+          expires_in: 300,
+        }),
+      }),
+      leaseEnv,
+    );
+    expect(created.status).toBe(200);
     const { id } = (await created.json()) as { id: string };
 
     // sender-authenticated read does NOT claim
@@ -298,15 +315,15 @@ describe('worker', () => {
     expect(typeof stored.claimed_at).toBe('string');
 
     // status endpoint reflects claimed state without claiming others
-    const st = await worker.fetch(req('/v1/handoffs/' + id + '/status'), env);
+    const st = await worker.fetch(req('/v1/handoffs/' + id + '/status'), leaseEnv);
     const stBody = (await st.json()) as { status: string; lease_remaining_seconds: number };
     expect(stBody.status).toBe('claimed');
     expect(stBody.lease_remaining_seconds).toBeGreaterThan(0);
 
     // simulate lease expiry: age claimed_at beyond the lease
-    stored.claimed_at = new Date(Date.now() - 61_000).toISOString();
-    await env.HANDOFFS.put('h:' + id, JSON.stringify(stored));
-    const burned = await worker.fetch(req('/v1/handoffs/' + id), env);
+    stored.claimed_at = new Date(Date.now() - 31_000).toISOString();
+    await env.HANDOFFS.put('h:' + id, JSON.stringify(stored), { expirationTtl: 3600 });
+    const burned = await worker.fetch(req('/v1/handoffs/' + id, { headers: { 'X-No-Claim': '1' } }), leaseEnv);
     expect(burned.status).toBe(410);
     expect(((await burned.json()) as { error: string }).error).toBe('burned');
 
@@ -316,8 +333,8 @@ describe('worker', () => {
     // KV TTL may delete the data before anyone reads again: the claim sidecar
     // alone must still produce a stable 410 (lazy tombstone)
     await env.HANDOFFS.put('c:' + id, JSON.stringify({ claimed_at: new Date().toISOString(), lease_until: new Date(Date.now() - 1000).toISOString() }), { expirationTtl: 3600 });
-    expect((await worker.fetch(req('/v1/handoffs/' + id), env)).status).toBe(410);
-    const st2 = await worker.fetch(req('/v1/handoffs/' + id + '/status'), env);
+    expect((await worker.fetch(req('/v1/handoffs/' + id), leaseEnv)).status).toBe(410);
+    const st2 = await worker.fetch(req('/v1/handoffs/' + id + '/status'), leaseEnv);
     expect(((await st2.json()) as { status: string }).status).toBe('burned');
   });
 
