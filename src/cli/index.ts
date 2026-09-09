@@ -3,15 +3,22 @@ import path from 'node:path';
 import {
   BUNDLE_CONTENT_TYPE,
   BUNDLE_LIMITS,
-  BUNDLE_PROTOCOL,
-  buildBundle,
   isTextPath,
   looksBinary,
+  mediaTypeFor,
   normalizeBundlePath,
-  serializeBundle,
   type BundleEntryInput,
 } from '../shared/bundle.js';
-import { decryptHandoff, DEFAULT_ITERATIONS, encryptHandoff } from '../shared/handoff-crypto.js';
+import { decryptHandoff, DEFAULT_ITERATIONS, encryptHandoff, generateSecret } from '../shared/handoff-crypto.js';
+import {
+  buildSplitRecord,
+  decryptSplitObject,
+  fileObjectId,
+  generateHandoffId,
+  sha256Hex,
+  type SplitManifest,
+  type SplitManifestFile,
+} from '../shared/split.js';
 import { LIMITS } from '../shared/types.js';
 import { fetchEnvelope, pushEnvelope } from './api.js';
 import { copyToClipboard } from './clipboard.js';
@@ -319,36 +326,75 @@ async function bundlePush(fileList: string[], opts: BundlePushOptions): Promise<
     : DEFAULT_ITERATIONS;
   if (!Number.isInteger(iterations)) fail('--iterations 必须是整数');
 
-  const bundle = await buildBundle(entries, {
-    prompt: opts.prompt,
-    notes: opts.notes || undefined,
+  // split transport: manifest + one encrypted object per file
+  const handoffId = generateHandoffId();
+  const secret = generateSecret();
+  const manifestFiles: SplitManifestFile[] = [];
+  const fileTexts: Array<{ objectId: string; text: string }> = [];
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i] as BundleEntryInput;
+    manifestFiles.push({
+      object_id: fileObjectId(i),
+      path: e.path,
+      media_type: mediaTypeFor(e.path),
+      size: new TextEncoder().encode(e.text).length,
+      sha256: await sha256Hex(e.text),
+    });
+    fileTexts.push({ objectId: fileObjectId(i), text: e.text });
+  }
+  const manifest: SplitManifest = {
+    protocol: 'agent-context-bundle',
+    version: 1,
+    request: { prompt: opts.prompt },
+    generated_at: new Date().toISOString(),
     generator: `agent-bridge-cli/${VERSION}`,
-  });
-  const serialized = serializeBundle(bundle);
+    files: manifestFiles,
+  };
+  if (opts.notes) manifest.notes = opts.notes;
 
-  process.stdout.write(`🔐 加密 Bundle（${bundle.files.length} 个文件，${humanSize(totalBytes)}）…\n`);
-  const { secret, envelope } = await encryptHandoff(serialized, {
-    contentType: BUNDLE_CONTENT_TYPE,
+  const record = await buildSplitRecord({
+    handoffId,
+    secret,
     iterations,
+    manifest,
+    fileTexts,
+    contentType: BUNDLE_CONTENT_TYPE,
   });
 
+  process.stdout.write(`🔐 加密 Bundle（${manifestFiles.length} 个文件独立加密，共 ${humanSize(totalBytes)}）…\n`);
   const created = await pushEnvelope(cfg.baseUrl, cfg.uploadToken, {
-    ...envelope,
+    ...record,
     expires_in: ttl,
-  });
+  } as unknown as Parameters<typeof pushEnvelope>[2]);
 
   let verified = false;
   try {
     const back = await fetchEnvelope(cfg.baseUrl, created.id);
     if (back.status === 200 && back.envelope) {
-      const roundtrip = await decryptHandoff(back.envelope, secret);
-      const parsed = JSON.parse(roundtrip) as { protocol?: string; files?: Array<{ path: string; sha256: string }> };
+      const remote = back.envelope as unknown as {
+        id: string;
+        salt: string;
+        iterations: number;
+        objects: Array<{ object_id: string; iv: string; ciphertext: string }>;
+      };
+      const manifestObj = remote.objects.find((o) => o.object_id === 'manifest');
+      if (!manifestObj) throw new Error('manifest object missing');
+      const manifestText = await decryptSplitObject(remote, secret, remote.id, 'manifest', manifestObj.iv, manifestObj.ciphertext);
+      const parsedManifest = JSON.parse(manifestText) as SplitManifest;
       verified =
-        parsed.protocol === BUNDLE_PROTOCOL &&
-        parsed.files?.length === bundle.files.length &&
-        bundle.files.every((f) =>
-          parsed.files?.some((p) => p.path === f.path && p.sha256 === f.sha256),
-        );
+        parsedManifest.files.length === manifestFiles.length &&
+        manifestFiles.every((mf) => {
+          const got = parsedManifest.files.find((f) => f.object_id === mf.object_id);
+          return got && got.path === mf.path && got.sha256 === mf.sha256;
+        });
+      if (verified) {
+        for (const mf of manifestFiles) {
+          const obj = remote.objects.find((o) => o.object_id === mf.object_id);
+          if (!obj) { verified = false; break; }
+          const text = await decryptSplitObject(remote, secret, remote.id, mf.object_id, obj.iv, obj.ciphertext);
+          if (await sha256Hex(text) !== mf.sha256) { verified = false; break; }
+        }
+      }
     }
   } catch {
     verified = false;
@@ -366,7 +412,7 @@ async function bundlePush(fileList: string[], opts: BundlePushOptions): Promise<
   ].join('\n');
 
   console.log(`
-Context Bundle ready ✅（${bundle.files.length} 个文件，共 ${humanSize(totalBytes)}，已回读解密校验）
+Context Bundle ready ✅（${manifestFiles.length} 个文件独立加密，共 ${humanSize(totalBytes)}，已回读逐文件校验）
 Request: ${opts.prompt || '（未提供——建议附一句你想让对方解决什么）'}
 URL:      ${created.url}
 API:      ${created.api_url}

@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.3.0 — 2026-09-09
+
+- **Split transport for Context Bundles**: the manifest and each file are
+  encrypted as independent objects (shared PBKDF2-derived key, per-object
+  random IV, AES-GCM additionalData binding
+  `agent-handoff/v2/<handoffId>/<objectId>`), so agents read a small
+  `manifest.txt` first and fetch + decrypt only the files they need. No more
+  multi-hundred-chunk megciphertext for agents to reassemble
+- Client-generated handoff ids (130-bit, non-enumerable) so the id can be
+  bound into the AAD before upload; server checks format + collisions (409)
+- New agent endpoints: `/v1/handoffs/<id>/manifest.txt` and
+  `/v1/handoffs/<id>/files/<objectId>.txt`; viewer page renders split bundles
+  with lazy per-file decryption
+- Read leases / burn-after-claim remain future work (see scope notes) —
+  repeatable reads within the TTL are deliberately kept for retrieval retry
+  reliability
+
 ## 1.2.2 — 2026-09-09
 
 - Text envelope: ciphertext is emitted as an ordered `ciphertext_chunks` list

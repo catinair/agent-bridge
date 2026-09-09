@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { startDevServer, type DevServer } from '../src/local-dev/server.js';
 import { decryptHandoff } from '../src/shared/handoff-crypto.js';
+import { decryptSplitObject } from '../src/shared/split.js';
+import { sha256Hex } from '../src/shared/split.js';
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const run = (args: string[], env: NodeJS.ProcessEnv) =>
@@ -165,20 +167,33 @@ describe('end-to-end: CLI -> worker -> retrieval -> decryption', () => {
     const { api, password } = parseHandoff(result.stdout);
     const res = await fetch(api);
     expect(res.status).toBe(200);
-    const envelope = (await res.json()) as Parameters<typeof decryptHandoff>[0];
-    expect(envelope.content_type).toBe('application/vnd.agent-context-bundle+json');
+    const record = (await res.json()) as {
+      layout: string;
+      id: string;
+      salt: string;
+      iterations: number;
+      objects: Array<{ object_id: string; iv: string; ciphertext: string }>;
+    };
+    expect(record.layout).toBe('split');
 
-    const bundle = JSON.parse(await decryptHandoff(envelope, password)) as {
+    // manifest first, then files independently — the whole point of split transport
+    const manifestObj = record.objects.find((o) => o.object_id === 'manifest')!;
+    const manifestText = await decryptSplitObject(record, password, record.id, 'manifest', manifestObj.iv, manifestObj.ciphertext);
+    const manifest = JSON.parse(manifestText) as {
       protocol: string;
       request: { prompt: string };
-      files: Array<{ path: string; content: string; media_type: string }>;
+      files: Array<{ object_id: string; path: string; media_type: string; sha256: string }>;
     };
-    expect(bundle.protocol).toBe('agent-context-bundle');
-    expect(bundle.request.prompt).toContain('过度设计');
-    expect(bundle.files).toHaveLength(3);
-    const agents = bundle.files.find((f) => f.path.endsWith('AGENTS.md'));
-    expect(agents?.content).toContain('优先阅读本文件');
-    expect(agents?.media_type).toBe('text/markdown');
-    expect(bundle.files.some((f) => f.path.includes('.env'))).toBe(false);
+    expect(manifest.protocol).toBe('agent-context-bundle');
+    expect(manifest.request.prompt).toContain('过度设计');
+    expect(manifest.files).toHaveLength(3);
+    expect(manifest.files.some((f) => f.path.includes('.env'))).toBe(false);
+
+    const agents = manifest.files.find((f) => f.path.endsWith('AGENTS.md'))!;
+    expect(agents.media_type).toBe('text/markdown');
+    const agentsObj = record.objects.find((o) => o.object_id === agents.object_id)!;
+    const agentsText = await decryptSplitObject(record, password, record.id, agents.object_id, agentsObj.iv, agentsObj.ciphertext);
+    expect(agentsText).toContain('优先阅读本文件');
+    expect(await sha256Hex(agentsText)).toBe(agents.sha256);
   }, 90_000);
 });

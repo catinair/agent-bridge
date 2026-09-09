@@ -199,7 +199,19 @@ size/sha256/content`），远端 Agent 直接阅读原文。二进制或被防�
 GET /v1/handoffs/{id}
 ```
 
-返回信封（服务器永远只看到这些字段）。若抓取层吞掉 JSON body，可用纯文本
+Bundle 使用 **split transport**：manifest 与每个文件作为独立对象加密
+（同一 handoff secret、每对象随机 IV、AAD 绑定 `agent-handoff/v2/<id>/<objectId>`
+防止中转方调换/拼接对象）。Agent 先读 manifest（request + 文件清单 + 每文件
+object_id），再按需取用并独立解密：
+
+```text
+GET /v1/handoffs/<id>                     # 完整记录（全部对象）
+GET /v1/handoffs/<id>/manifest.txt        # manifest 信封（text/plain）
+GET /v1/handoffs/<id>/files/<obj>.txt     # 文件对象信封（text/plain）
+```
+
+id 由客户端生成（仍然 130-bit 不可枚举），以便在上传前绑定 AAD。
+单文件 HANDOFF 保持原始单信封格式。若抓取层吞掉 JSON body，可用纯文本
 fallback：`GET /v1/handoffs/{id}.txt`（`text/plain`，同样的字段以 key: value
 平铺），链接同样标注在 /h/:id 页面上：
 

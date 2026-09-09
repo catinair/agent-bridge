@@ -1,9 +1,15 @@
-import { base32CrockfordEncode } from '../shared/codec.js';
+import { base32CrockfordEncode, isValidBase64 } from '../shared/codec.js';
 import type { Env } from './env.js';
 import { DATA_PREFIX, sha256Hex, verifyBearerToken } from './auth.js';
-import { LIMITS, validateEnvelope } from '../shared/types.js';
+import { DEFAULT_CONTENT_TYPE, LIMITS, validateEnvelope } from '../shared/types.js';
 import { renderViewerPage } from './page.js';
 import { renderCreatePage } from './new-page.js';
+import {
+  AAD_PREFIX,
+  SPLIT_LAYOUT,
+  isValidHandoffId,
+  type SplitObject,
+} from '../shared/split.js';
 
 const ID_LENGTH = 26; // 26 x 5 bits = 130 bits of entropy, non-enumerable
 
@@ -77,6 +83,16 @@ export default {
       return createHandoff(request, env, url);
     }
 
+    const manifestMatch = /^\/v1\/handoffs\/([A-Za-z0-9]+)\/manifest\.txt$/.exec(path);
+    if (manifestMatch && method === 'GET') {
+      return objectText(env, manifestMatch[1] ?? '', request, 'manifest');
+    }
+
+    const fileMatch = /^\/v1\/handoffs\/([A-Za-z0-9]+)\/files\/([a-z0-9_]{1,32})\.txt$/.exec(path);
+    if (fileMatch && method === 'GET') {
+      return objectText(env, fileMatch[1] ?? '', request, fileMatch[2] ?? '');
+    }
+
     const apiMatch = /^\/v1\/handoffs\/([A-Za-z0-9]+)(\.txt)?$/.exec(path);
     if (apiMatch) {
       const id = apiMatch[1] ?? '';
@@ -124,6 +140,14 @@ async function createHandoff(request: Request, env: Env, url: URL): Promise<Resp
     return error(400, 'invalid_json');
   }
 
+  if (
+    typeof parsed === 'object' &&
+    parsed !== null &&
+    (parsed as Record<string, unknown>).layout === 'split'
+  ) {
+    return createSplitHandoff(request, parsed as Record<string, unknown>, env, url);
+  }
+
   const result = validateEnvelope(parsed);
   if (!result.ok) {
     return error(400, 'invalid_envelope', result.error);
@@ -156,35 +180,185 @@ async function createHandoff(request: Request, env: Env, url: URL): Promise<Resp
   });
 }
 
-async function readHandoff(env: Env, id: string, request: Request, asText = false): Promise<Response> {
+const MAX_OBJECTS = 104; // manifest + up to ~100 files + slack
+
+async function createSplitHandoff(
+  request: Request,
+  parsed: Record<string, unknown>,
+  env: Env,
+  url: URL,
+): Promise<Response> {
+  if (!(await verifyBearerToken(request, env.BRIDGE_UPLOAD_TOKEN))) {
+    return error(401, 'unauthorized', 'missing or invalid upload token');
+  }
+
+  const id = String(parsed.id ?? '');
+  if (!isValidHandoffId(id)) {
+    return error(400, 'invalid_id', 'split handoffs require a client-generated id (16-64 url-safe chars)');
+  }
+  if ((await env.HANDOFFS.get(DATA_PREFIX + id)) !== null) {
+    return error(409, 'conflict', 'handoff id already exists; regenerate and retry');
+  }
+
+  const objects = parsed.objects;
+  if (!Array.isArray(objects) || objects.length < 2 || objects.length > MAX_OBJECTS) {
+    return error(400, 'invalid_objects', 'objects must be an array of 2..104 entries');
+  }
+
+  let totalCiphertextBytes = 0;
+  const seen = new Set<string>();
+  const cleanObjects: SplitObject[] = [];
+  for (const raw of objects) {
+    if (typeof raw !== 'object' || raw === null) return error(400, 'invalid_object');
+    const o = raw as Record<string, unknown>;
+    const objectId = o.object_id;
+    if (typeof objectId !== 'string' || !/^[a-z0-9_]{1,32}$/.test(objectId) || seen.has(objectId)) {
+      return error(400, 'invalid_object', 'object ids must be unique lowercase ids');
+    }
+    seen.add(objectId);
+    if (typeof o.iv !== 'string' || !isValidBase64(o.iv, 64) || atob(o.iv).length !== 12) {
+      return error(400, 'invalid_object', 'each object needs a 12-byte base64 iv');
+    }
+    if (typeof o.ciphertext !== 'string' || !isValidBase64(o.ciphertext, 4_100_000)) {
+      return error(400, 'invalid_object', 'each object needs valid base64 ciphertext (<= 4.1 MB)');
+    }
+    totalCiphertextBytes += atob(o.ciphertext).length;
+    cleanObjects.push({ object_id: objectId, iv: o.iv, ciphertext: o.ciphertext });
+  }
+  if (totalCiphertextBytes > LIMITS.maxCiphertextBytes) {
+    return error(413, 'payload_too_large', 'total ciphertext exceeds the bundle cap');
+  }
+
+  const salt = parsed.salt;
+  if (typeof salt !== 'string' || !isValidBase64(salt, 64)) {
+    return error(400, 'invalid_envelope', 'salt must be valid base64 (<= 64 bytes)');
+  }
+  const iterations = parsed.iterations;
+  if (typeof iterations !== 'number' || !Number.isInteger(iterations) ||
+      iterations < LIMITS.minIterations || iterations > LIMITS.maxIterations) {
+    return error(400, 'invalid_envelope', 'iterations out of range');
+  }
+  let contentType = DEFAULT_CONTENT_TYPE;
+  if (parsed.content_type !== undefined) {
+    if (typeof parsed.content_type !== 'string' || parsed.content_type.length > 100 ||
+        !/^[\w.+-]+\/[\w.+-]+$/.test(parsed.content_type)) {
+      return error(400, 'invalid_envelope', 'invalid content_type');
+    }
+    contentType = parsed.content_type;
+  }
+  let expiresIn: number = LIMITS.defaultTtlSeconds;
+  if (parsed.expires_in !== undefined) {
+    if (typeof parsed.expires_in !== 'number' || !Number.isInteger(parsed.expires_in) ||
+        parsed.expires_in < LIMITS.minTtlSeconds || parsed.expires_in > LIMITS.maxTtlSeconds) {
+      return error(400, 'invalid_envelope', 'expires_in out of range');
+    }
+    expiresIn = parsed.expires_in;
+  }
+
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + expiresIn * 1000);
+  const record = {
+    protocol: 'agent-handoff',
+    v: 1,
+    layout: SPLIT_LAYOUT,
+    id,
+    algorithm: 'AES-256-GCM',
+    kdf: 'PBKDF2-SHA256',
+    iterations,
+    salt,
+    content_type: contentType,
+    encoding: typeof parsed.encoding === 'string' ? parsed.encoding : 'utf-8',
+    secret_encoding: typeof parsed.secret_encoding === 'string' ? parsed.secret_encoding : 'base32-crockford-grouped-4',
+    secret_normalization: typeof parsed.secret_normalization === 'string'
+      ? parsed.secret_normalization
+      : 'strip-hyphens-whitespace-uppercase',
+    objects: cleanObjects,
+    created_at: now.toISOString(),
+    expires_at: expiresAt.toISOString(),
+  };
+
+  await env.HANDOFFS.put(DATA_PREFIX + id, JSON.stringify(record), { expirationTtl: expiresIn });
+  return json({
+    id,
+    url: `${url.origin}/h/${id}`,
+    api_url: `${url.origin}/v1/handoffs/${id}`,
+    manifest_url: `${url.origin}/v1/handoffs/${id}/manifest.txt`,
+    created_at: record.created_at,
+    expires_at: record.expires_at,
+  });
+}
+
+/** Flat key: value envelope for one object of a split record (agent-facing). */
+async function objectText(env: Env, id: string, request: Request, objectId: string): Promise<Response> {
+  const stored = await readRecordForTransfer(env, id, request);
+  if (typeof stored === 'number') return error(stored, stored === 404 ? 'not_found' : 'rate_limited');
+  if (stored.layout !== SPLIT_LAYOUT) return error(404, 'not_found', 'handoff not found or expired');
+  const obj = (stored.objects as SplitObject[]).find((o) => o.object_id === objectId);
+  if (!obj) return error(404, 'not_found', 'object not found');
+
+  const objectRecord: Record<string, unknown> = {
+    object_id: objectId,
+    algorithm: stored.algorithm,
+    kdf: stored.kdf,
+    iterations: stored.iterations,
+    salt: stored.salt,
+    encoding: stored.encoding,
+    secret_encoding: stored.secret_encoding,
+    secret_normalization: stored.secret_normalization,
+    iv: obj.iv,
+    aad: `${AAD_PREFIX}/${stored.id}/${objectId}`,
+    ciphertext: obj.ciphertext,
+    content_type: stored.content_type,
+    created_at: stored.created_at,
+    expires_at: stored.expires_at,
+  };
+  return new Response(envelopeToText(objectRecord), {
+    status: 200,
+    headers: baseHeaders({ 'Content-Type': 'text/plain; charset=utf-8' }),
+  });
+}
+
+/**
+ * Fetch + validate a record for transfer; returns the parsed record or an
+ * HTTP status number (404 expired/missing, 429 rate limited).
+ */
+async function readRecordForTransfer(env: Env, id: string, request: Request): Promise<Record<string, unknown> | number> {
   const perMin = parseInt(env.RATE_LIMIT_PER_MIN ?? '60', 10);
   const limit = Number.isFinite(perMin) && perMin > 0 ? perMin : 60;
-  if (!(await rateLimit(env, request, 'read', limit))) {
-    return error(429, 'rate_limited', 'too many requests from this address');
-  }
+  if (!(await rateLimit(env, request, 'read', limit))) return 429;
 
   const stored = await env.HANDOFFS.get(DATA_PREFIX + id);
-  if (stored === null) {
-    return error(404, 'not_found', 'handoff not found or expired');
-  }
-
+  if (stored === null) return 404;
   let record: Record<string, unknown>;
   try {
     record = JSON.parse(stored) as Record<string, unknown>;
   } catch {
-    return error(404, 'not_found', 'handoff not found or expired');
+    return 404;
   }
-
   const expiresAt = Date.parse(String(record.expires_at ?? ''));
   if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
     await env.HANDOFFS.delete(DATA_PREFIX + id);
-    return error(404, 'not_found', 'handoff not found or expired');
+    return 404;
+  }
+  return record;
+}
+
+async function readHandoff(env: Env, id: string, request: Request, asText = false): Promise<Response> {
+  const record = await readRecordForTransfer(env, id, request);
+  if (typeof record === 'number') {
+    return record === 429
+      ? error(429, 'rate_limited', 'too many requests from this address')
+      : error(404, 'not_found', 'handoff not found or expired');
   }
 
   if (asText) {
     // Plain-text fallback: some web-retrieval layers swallow raw JSON bodies.
     // Same ciphertext fields as the JSON endpoint, flat key: value lines,
     // nothing secret added - the password still never touches the server.
+    // For split bundles this is the manifest object (the discovery entry point).
+    if (record.layout === SPLIT_LAYOUT) {
+      return objectText(env, id, request, 'manifest');
+    }
     return new Response(envelopeToText(record), {
       status: 200,
       headers: baseHeaders({ 'Content-Type': 'text/plain; charset=utf-8' }),
@@ -194,6 +368,7 @@ async function readHandoff(env: Env, id: string, request: Request, asText = fals
 }
 
 const TEXT_FIELD_ORDER = [
+  'object_id',
   'protocol',
   'v',
   'algorithm',
@@ -201,6 +376,7 @@ const TEXT_FIELD_ORDER = [
   'iterations',
   'salt',
   'iv',
+  'aad',
   'ciphertext',
   'content_type',
   'encoding',

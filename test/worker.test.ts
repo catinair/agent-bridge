@@ -4,6 +4,12 @@ import type { Env } from '../src/worker/env.js';
 import { InMemoryKV } from '../src/local-dev/kv.js';
 import { decryptHandoff, encryptHandoff, generateSecret } from '../src/shared/handoff-crypto.js';
 import { bytesToBase64 } from '../src/shared/codec.js';
+import {
+  buildSplitRecord,
+  generateHandoffId,
+  fileObjectId,
+} from '../src/shared/split.js';
+import { generateSecret } from '../src/shared/handoff-crypto.js';
 
 const TOKEN = 'test-upload-token';
 
@@ -130,6 +136,103 @@ describe('worker', () => {
     const html = await page.text();
     expect(html).toContain(`href="https://bridge.example.com/v1/handoffs/${id}.txt"`);
     expect(html).toContain('text envelope');
+  });
+
+  it('accepts split-layout bundles and serves manifest / per-file text envelopes', async () => {
+    const secret = generateSecret();
+    const id = generateHandoffId();
+    const manifest = {
+      protocol: 'agent-context-bundle' as const,
+      version: 1,
+      request: { prompt: 'e2e split' },
+      generated_at: new Date().toISOString(),
+      generator: 'test',
+      files: [
+        { object_id: fileObjectId(0), path: 'AGENTS.md', media_type: 'text/markdown', size: 9, sha256: 'a'.repeat(64) },
+        { object_id: fileObjectId(1), path: 'models.yaml', media_type: 'application/yaml', size: 24, sha256: 'b'.repeat(64) },
+      ],
+    };
+    const record = await buildSplitRecord({
+      handoffId: id,
+      secret,
+      iterations: 600_000,
+      manifest,
+      fileTexts: [
+        { objectId: fileObjectId(0), text: '# 规则\n' },
+        { objectId: fileObjectId(1), text: 'default: gpt-5-mini\n' },
+      ],
+      contentType: 'application/vnd.agent-context-bundle+json',
+    });
+
+    const created = await worker.fetch(
+      req('/v1/handoffs', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...record, expires_in: 300 }),
+      }),
+      env,
+    );
+    expect(created.status).toBe(200);
+    const data = (await created.json()) as { id: string; manifest_url: string };
+    expect(data.id).toBe(id);
+    expect(data.manifest_url).toContain('/manifest.txt');
+
+    const manifestRes = await worker.fetch(req('/v1/handoffs/' + id + '/manifest.txt'), env);
+    expect(manifestRes.status).toBe(200);
+    expect(manifestRes.headers.get('Content-Type')).toContain('text/plain');
+    expect(await manifestRes.text()).toContain('object_id: manifest');
+
+    const fileRes = await worker.fetch(req('/v1/handoffs/' + id + '/files/f2.txt'), env);
+    expect(fileRes.status).toBe(200);
+    expect(await fileRes.text()).toContain('object_id: f2');
+
+    // the whole-record JSON endpoint also serves split records
+    const full = await worker.fetch(req('/v1/handoffs/' + id), env);
+    const fullRecord = (await full.json()) as { layout: string; objects: unknown[] };
+    expect(fullRecord.layout).toBe('split');
+    expect(fullRecord.objects).toHaveLength(3);
+  });
+
+  it('rejects duplicate and malformed split ids', async () => {
+    const secret = generateSecret();
+    const id = generateHandoffId();
+    const record = await buildSplitRecord({
+      handoffId: id,
+      secret,
+      iterations: 600_000,
+      manifest: {
+        protocol: 'agent-context-bundle',
+        version: 1,
+        request: { prompt: '' },
+        generated_at: new Date().toISOString(),
+        generator: 'test',
+        files: [{ object_id: 'f1', path: 'a.md', media_type: 'text/markdown', size: 2, sha256: 'c'.repeat(64) }],
+      },
+      fileTexts: [{ objectId: 'f1', text: 'hi' }],
+      contentType: 'application/vnd.agent-context-bundle+json',
+    });
+
+    const post = () =>
+      worker.fetch(
+        req('/v1/handoffs', {
+          method: 'POST',
+          headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...record, expires_in: 300 }),
+        }),
+        env,
+      );
+    expect((await post()).status).toBe(200);
+    expect((await post()).status).toBe(409); // same id twice
+
+    const badId = await worker.fetch(
+      req('/v1/handoffs', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...record, id: 'bad id!', expires_in: 300 }),
+      }),
+      env,
+    );
+    expect(badId.status).toBe(400);
   });
 
   it('returns 404 (not distinguishable from expired) for unknown ids', async () => {

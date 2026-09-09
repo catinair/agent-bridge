@@ -153,6 +153,21 @@ type:
    href="https://…/v1/handoffs/<id>">Agent-readable encrypted JSON</a>
 ```
 
+Bundles use the **split transport**: the manifest and every file are encrypted
+as independent objects (same handoff secret, per-object random IV, AES-GCM
+additionalData binding `agent-handoff/v2/<handoffId>/<objectId>` so an
+untrusted relay cannot reorder, rename or splice objects). Agents read the
+manifest first — request + file list with per-object ids — then fetch and
+decrypt exactly the files they need:
+
+```text
+GET /v1/handoffs/<id>                     # full record (all objects)
+GET /v1/handoffs/<id>/manifest.txt        # manifest envelope (text/plain)
+GET /v1/handoffs/<id>/files/<obj>.txt     # file object envelope (text/plain)
+```
+
+The id is generated client-side so it can be bound into the AAD before
+upload. Single-document handoffs keep the original single-envelope format.
 `GET /v1/handoffs/<id>` returns the envelope as JSON. If a retrieval layer
 swallows raw JSON bodies, the same envelope is also available as flat
 `key: value` text at `GET /v1/handoffs/<id>.txt` (`text/plain`) — linked from

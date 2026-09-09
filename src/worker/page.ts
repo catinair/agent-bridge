@@ -61,6 +61,35 @@ export const DECRYPT_FN_SOURCE = `(async function bridgeDecrypt(envelopeJson, se
   return new TextDecoder().decode(pt);
 })`;
 
+/**
+ * Split-transport object decryption: manifest + per-file objects, each bound
+ * to its identity via AES-GCM additionalData. Exported for parity tests.
+ */
+export const BRIDGE_SPLIT_SOURCE = `(async function bridgeDecryptObject(record, objectId, secret) {
+  'use strict';
+  function b64decode(s) {
+    var bin = atob(s);
+    var out = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+  function norm(s) { return s.replace(/[\\s-]/g, '').toUpperCase(); }
+  var obj = null;
+  for (var i = 0; i < record.objects.length; i++) {
+    if (record.objects[i].object_id === objectId) { obj = record.objects[i]; break; }
+  }
+  if (!obj) throw new Error('object not found: ' + objectId);
+  var km = await crypto.subtle.importKey('raw', new TextEncoder().encode(norm(secret)), 'PBKDF2', false, ['deriveKey']);
+  var key = await crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt: b64decode(record.salt), iterations: record.iterations, hash: 'SHA-256' },
+    km, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+  var aad = new TextEncoder().encode('agent-handoff/v2/' + record.id + '/' + objectId);
+  var pt = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: b64decode(obj.iv), additionalData: aad },
+    key, b64decode(obj.ciphertext));
+  return new TextDecoder().decode(pt);
+})`;
+
 export function renderViewerPage(id: string, origin = ''): string {
   // ids are validated by the route already; standalone safety for direct use
   if (!/^[A-Za-z0-9]+$/.test(id)) {
@@ -137,6 +166,7 @@ const VIEWER_PAGE_HTML = `<!doctype html>
 </div>
 <script>
 const bridgeDecrypt = ${DECRYPT_FN_SOURCE};
+const bridgeDecryptObject = ${BRIDGE_SPLIT_SOURCE};
 (function () {
   'use strict';
   var id = location.pathname.split('/').filter(Boolean).pop();
@@ -187,6 +217,14 @@ const bridgeDecrypt = ${DECRYPT_FN_SOURCE};
     say('正在派生密钥并解密…');
     try {
       var t0 = Date.now();
+      if (envelope.layout === 'split') {
+        await renderSplit(envelope, secret);
+        elMeta.style.display = 'block';
+        countdown();
+        say('✅ manifest 已解密（' + ((Date.now() - t0) / 1000).toFixed(1) + 's），展开文件时按需解密。');
+        elOpen.disabled = false;
+        return;
+      }
       var plain = await bridgeDecrypt(envelope, secret);
       var isBundle = (envelope.content_type || '').indexOf('agent-context-bundle') >= 0;
       if (isBundle) {
@@ -216,6 +254,60 @@ const bridgeDecrypt = ${DECRYPT_FN_SOURCE};
     };
     elMeta.parentNode.insertBefore(copy, elMeta);
     return copy;
+  }
+
+  async function renderSplit(record, secret) {
+    var manifestText = await bridgeDecryptObject(record, 'manifest', secret);
+    var manifest = JSON.parse(manifestText);
+    var wrap = document.createElement('div');
+    var prompt = manifest.request && manifest.request.prompt ? manifest.request.prompt : '';
+    if (prompt) {
+      var req = document.createElement('div');
+      req.className = 'request';
+      req.textContent = '🎯 本次请求：' + prompt;
+      wrap.appendChild(req);
+    }
+    if (manifest.notes) {
+      var notes = document.createElement('div');
+      notes.className = 'request';
+      notes.style.borderColor = '#262c38';
+      notes.textContent = '📎 材料说明：' + manifest.notes;
+      wrap.appendChild(notes);
+    }
+    var list = document.createElement('div');
+    list.className = 'bundle-files';
+    var files = manifest.files || [];
+    for (var i = 0; i < files.length; i++) {
+      (function (mf) {
+        var d = document.createElement('details');
+        var s2 = document.createElement('summary');
+        s2.textContent = '📄 ' + mf.path + '  ·  ' + mf.size + ' B  ·  ' + (mf.media_type || '');
+        d.appendChild(s2);
+        var pre = document.createElement('pre');
+        pre.textContent = '（展开时按需解密）';
+        d.appendChild(pre);
+        d.addEventListener('toggle', function () {
+          if (!d.open || d.dataset.done === '1') return;
+          d.dataset.done = '1';
+          bridgeDecryptObject(record, mf.object_id, secret).then(function (text) {
+            pre.textContent = text;
+            var btn = document.createElement('button');
+            btn.textContent = '复制此文件';
+            btn.className = 'secondary';
+            btn.style.margin = '0.5rem 0.8rem 0.8rem';
+            btn.onclick = function () {
+              navigator.clipboard.writeText(text).then(function () { btn.textContent = '已复制'; });
+            };
+            d.appendChild(btn);
+          }).catch(function (err) {
+            pre.textContent = '❌ 解密失败：' + (err && err.message ? err.message : '未知错误');
+          });
+        });
+        list.appendChild(d);
+      })(files[i]);
+    }
+    wrap.appendChild(list);
+    elMeta.parentNode.insertBefore(wrap, elMeta);
   }
 
   function renderBundle(bundle, rawPlain) {
