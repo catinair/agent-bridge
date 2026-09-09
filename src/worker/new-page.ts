@@ -216,24 +216,25 @@ const createLib = __CREATE_LIB__;
     try {
       var total = entries.reduce(function (s, e) { return s + new TextEncoder().encode(e.text).length; }, 0);
       if (total > createLib.LIMITS.maxTotalBytes) throw new Error('总大小超过上限 ' + createLib.LIMITS.maxTotalBytes + ' 字节');
-      var bundle = await createLib.buildBundleJson(entries, elPrompt.value.trim(), elNotes.value.trim());
-      var enc = await createLib.encryptBundle(bundle);
+      var prompt = elPrompt.value.trim();
+      var notes = elNotes.value.trim();
+      var built = await createLib.buildSplitHandoff(entries, prompt, notes, location.origin);
       var res = await fetch('/v1/handoffs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-        body: JSON.stringify(Object.assign({}, enc.envelope, { expires_in: 300 }))
+        body: JSON.stringify(Object.assign({}, built.body, { expires_in: 300 }))
       });
       if (res.status === 401) throw new Error('上传令牌无效（HTTP 401）');
       if (!res.ok) throw new Error('上传失败：HTTP ' + res.status);
       var created = await res.json();
-      showResult(created, enc.secret, bundle, total);
+      showResult(created, built.secret, entries.length, total);
     } catch (err) {
       say('❌ ' + (err && err.message ? err.message : '创建失败'), 'err');
       elCreate.disabled = false;
     }
   };
 
-  function showResult(created, secret, bundle, total) {
+  function showResult(created, secret, fileCount, prompt, total) {
     document.getElementById('form').style.display = 'none';
     var box = document.getElementById('result');
     box.style.display = 'block';
@@ -241,8 +242,8 @@ const createLib = __CREATE_LIB__;
     document.getElementById('rPwd').textContent = secret;
     var snippet = '继续这个项目：\\n' + created.url + '\\n密码：' + secret + '\\n（5 分钟内有效）';
     document.getElementById('rSnippet').textContent = snippet;
-    var summary = '📦 Context Bundle：' + bundle.files.length + ' 个文件，共 ' + human(total);
-    if (bundle.request.prompt) summary += '\\n🎯 ' + bundle.request.prompt;
+    var summary = '📦 Context Bundle：' + fileCount + ' 个文件，共 ' + human(total);
+    if (prompt) summary += '\\n🎯 ' + prompt;
     document.getElementById('rSnippet').parentNode.insertBefore(
       (function () { var d = document.createElement('div'); d.className = 'box'; d.textContent = summary; return d; })(),
       document.getElementById('rSnippet'));

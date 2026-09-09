@@ -167,7 +167,10 @@ GET /v1/handoffs/<id>/files/<obj>.txt     # file object envelope (text/plain)
 ```
 
 The id is generated client-side so it can be bound into the AAD before
-upload. Single-document handoffs keep the original single-envelope format.
+upload. Each manifest file entry carries discoverable absolute links
+(`href` to the text envelope, `json_href` to a JSON object endpoint), and the
+manifest text response appends a server-rendered link list for every object —
+retrieval agents follow links instead of deriving URLs. Single-document handoffs keep the original single-envelope format.
 `GET /v1/handoffs/<id>` returns the envelope as JSON. If a retrieval layer
 swallows raw JSON bodies, the same envelope is also available as flat
 `key: value` text at `GET /v1/handoffs/<id>.txt` (`text/plain`) — linked from

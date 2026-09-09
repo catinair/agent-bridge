@@ -32,6 +32,14 @@ export interface SplitManifestFile {
   media_type: string;
   size: number;
   sha256: string;
+  /** discoverable links (absolute), so agents never derive URLs themselves */
+  href: string;
+  json_href: string;
+}
+
+export function fileHrefs(origin: string, handoffId: string, objectId: string): { href: string; json_href: string } {
+  const base = `${origin.replace(/\/+$/, '')}/v1/handoffs/${handoffId}/files/${objectId}`;
+  return { href: `${base}.txt`, json_href: base };
 }
 
 export interface SplitManifest {
@@ -63,7 +71,10 @@ export interface SplitRecord {
 }
 
 export function aadFor(handoffId: string, objectId: string): Uint8Array {
-  return new TextEncoder().encode(`${AAD_PREFIX}/${handoffId}/${objectId}`);
+  // object-type domain separation: manifest and file objects live in
+  // different AAD namespaces so ids can never collide across types
+  const domain = objectId === MANIFEST_OBJECT_ID ? 'manifest' : 'file';
+  return new TextEncoder().encode(`${AAD_PREFIX}/${handoffId}/${domain}/${objectId}`);
 }
 
 export function generateHandoffId(): string {

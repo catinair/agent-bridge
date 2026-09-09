@@ -83,7 +83,8 @@ export const BRIDGE_SPLIT_SOURCE = `(async function bridgeDecryptObject(record, 
   var key = await crypto.subtle.deriveKey(
     { name: 'PBKDF2', salt: b64decode(record.salt), iterations: record.iterations, hash: 'SHA-256' },
     km, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
-  var aad = new TextEncoder().encode('agent-handoff/v2/' + record.id + '/' + objectId);
+  var domain = objectId === 'manifest' ? 'manifest' : 'file';
+  var aad = new TextEncoder().encode('agent-handoff/v2/' + record.id + '/' + domain + '/' + objectId);
   var pt = await crypto.subtle.decrypt(
     { name: 'AES-GCM', iv: b64decode(obj.iv), additionalData: aad },
     key, b64decode(obj.ciphertext));

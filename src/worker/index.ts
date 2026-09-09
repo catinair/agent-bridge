@@ -85,12 +85,12 @@ export default {
 
     const manifestMatch = /^\/v1\/handoffs\/([A-Za-z0-9]+)\/manifest\.txt$/.exec(path);
     if (manifestMatch && method === 'GET') {
-      return objectText(env, manifestMatch[1] ?? '', request, 'manifest');
+      return objectResponse(env, manifestMatch[1] ?? '', request, 'manifest', true);
     }
 
-    const fileMatch = /^\/v1\/handoffs\/([A-Za-z0-9]+)\/files\/([a-z0-9_]{1,32})\.txt$/.exec(path);
+    const fileMatch = /^\/v1\/handoffs\/([A-Za-z0-9]+)\/files\/([a-z0-9_]{1,32})(\.txt)?$/.exec(path);
     if (fileMatch && method === 'GET') {
-      return objectText(env, fileMatch[1] ?? '', request, fileMatch[2] ?? '');
+      return objectResponse(env, fileMatch[1] ?? '', request, fileMatch[2] ?? '', fileMatch[3] === '.txt');
     }
 
     const apiMatch = /^\/v1\/handoffs\/([A-Za-z0-9]+)(\.txt)?$/.exec(path);
@@ -288,34 +288,51 @@ async function createSplitHandoff(
   });
 }
 
-/** Flat key: value envelope for one object of a split record (agent-facing). */
-async function objectText(env: Env, id: string, request: Request, objectId: string): Promise<Response> {
-  const stored = await readRecordForTransfer(env, id, request);
-  if (typeof stored === 'number') return error(stored, stored === 404 ? 'not_found' : 'rate_limited');
-  if (stored.layout !== SPLIT_LAYOUT) return error(404, 'not_found', 'handoff not found or expired');
-  const obj = (stored.objects as SplitObject[]).find((o) => o.object_id === objectId);
+/** One object of a split record, as JSON or as the flat text envelope. */
+async function objectResponse(env: Env, id: string, request: Request, objectId: string, asText: boolean): Promise<Response> {
+  const record = await readRecordForTransfer(env, id, request);
+  if (typeof record === 'number') {
+    return record === 429
+      ? error(429, 'rate_limited', 'too many requests from this address')
+      : error(404, 'not_found', 'handoff not found or expired');
+  }
+  if (record.layout !== SPLIT_LAYOUT) return error(404, 'not_found', 'handoff not found or expired');
+
+  const objects = record.objects as SplitObject[];
+  const obj = objects.find((o) => o.object_id === objectId);
   if (!obj) return error(404, 'not_found', 'object not found');
 
+  const origin = new URL(request.url).origin;
   const objectRecord: Record<string, unknown> = {
     object_id: objectId,
-    algorithm: stored.algorithm,
-    kdf: stored.kdf,
-    iterations: stored.iterations,
-    salt: stored.salt,
-    encoding: stored.encoding,
-    secret_encoding: stored.secret_encoding,
-    secret_normalization: stored.secret_normalization,
+    algorithm: record.algorithm,
+    kdf: record.kdf,
+    iterations: record.iterations,
+    salt: record.salt,
+    encoding: record.encoding,
+    secret_encoding: record.secret_encoding,
+    secret_normalization: record.secret_normalization,
     iv: obj.iv,
-    aad: `${AAD_PREFIX}/${stored.id}/${objectId}`,
+    aad: `${AAD_PREFIX}/${record.id}/file/${objectId}`,
     ciphertext: obj.ciphertext,
-    content_type: stored.content_type,
-    created_at: stored.created_at,
-    expires_at: stored.expires_at,
+    content_type: record.content_type,
+    created_at: record.created_at,
+    expires_at: record.expires_at,
   };
-  return new Response(envelopeToText(objectRecord), {
-    status: 200,
-    headers: baseHeaders({ 'Content-Type': 'text/plain; charset=utf-8' }),
-  });
+
+  if (asText) {
+    const lines = [envelopeToText(objectRecord)];
+    // server-rendered discovery links (object ids only — paths stay encrypted)
+    lines.push('# object links');
+    for (const o of objects) {
+      lines.push(`${origin}/v1/handoffs/${id}/files/${o.object_id}.txt`);
+    }
+    return new Response(lines.join('\n'), {
+      status: 200,
+      headers: baseHeaders({ 'Content-Type': 'text/plain; charset=utf-8' }),
+    });
+  }
+  return json(objectRecord);
 }
 
 /**
@@ -357,7 +374,7 @@ async function readHandoff(env: Env, id: string, request: Request, asText = fals
     // nothing secret added - the password still never touches the server.
     // For split bundles this is the manifest object (the discovery entry point).
     if (record.layout === SPLIT_LAYOUT) {
-      return objectText(env, id, request, 'manifest');
+      return objectResponse(env, id, request, 'manifest', true);
     }
     return new Response(envelopeToText(record), {
       status: 200,

@@ -13,6 +13,7 @@ import { decryptHandoff, DEFAULT_ITERATIONS, encryptHandoff, generateSecret } fr
 import {
   buildSplitRecord,
   decryptSplitObject,
+  fileHrefs,
   fileObjectId,
   generateHandoffId,
   sha256Hex,
@@ -331,6 +332,7 @@ async function bundlePush(fileList: string[], opts: BundlePushOptions): Promise<
   const secret = generateSecret();
   const manifestFiles: SplitManifestFile[] = [];
   const fileTexts: Array<{ objectId: string; text: string }> = [];
+  const origin = cfg.baseUrl.replace(/\/+$/, '');
   for (let i = 0; i < entries.length; i++) {
     const e = entries[i] as BundleEntryInput;
     manifestFiles.push({
@@ -339,6 +341,7 @@ async function bundlePush(fileList: string[], opts: BundlePushOptions): Promise<
       media_type: mediaTypeFor(e.path),
       size: new TextEncoder().encode(e.text).length,
       sha256: await sha256Hex(e.text),
+      ...fileHrefs(origin, handoffId, fileObjectId(i)),
     });
     fileTexts.push({ objectId: fileObjectId(i), text: e.text });
   }

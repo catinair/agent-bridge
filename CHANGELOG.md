@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.3.1 — 2026-09-09
+
+- Manifest file entries now carry agent-discoverable absolute links:
+  `href` (text envelope) and `json_href` (JSON object endpoint) — reported
+  missing by real ChatGPT retrieval, which refuses to derive URLs itself
+- AAD gains object-type domain separation:
+  `agent-handoff/v2/<id>/manifest` vs `agent-handoff/v2/<id>/file/<objectId>`
+- `GET /v1/handoffs/<id>/files/<objectId>` (JSON) object endpoint added;
+  manifest text responses append a server-rendered link list for all objects
+- `/new` web creator migrated to split transport
+
 ## 1.3.0 — 2026-09-09
 
 - **Split transport for Context Bundles**: the manifest and each file are

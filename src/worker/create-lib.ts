@@ -3,12 +3,13 @@
  * <script> source string (same pattern as the viewer's DECRYPT_FN_SOURCE).
  *
  * It re-implements, in dependency-free ES5-ish JS, exactly what the CLI does:
- *   path/credential firewall → Context Bundle JSON → secret (160-bit,
- *   Crockford base32, grouped) → PBKDF2-SHA256 → AES-256-GCM → envelope.
+ *   path/credential firewall → Context Bundle (split transport: manifest +
+ *   per-file objects) → secret (160-bit, Crockford base32, grouped) →
+ *   PBKDF2-SHA256 → AES-256-GCM with AAD binding.
  *
  * Keeping it as an exported string lets tests execute the exact same source
  * in Node and cross-verify against the shared TypeScript implementation
- * (encrypt with the page lib, decrypt with the CLI crypto, and vice versa).
+ * (decrypt lib-built objects with the shared crypto, and vice versa).
  * Plain JS, single quotes, no template literals — embedded in a TS template.
  */
 export const CREATE_LIB_SOURCE = `(function bridgeCreateLib() {
@@ -165,67 +166,65 @@ export const CREATE_LIB_SOURCE = `(function bridgeCreateLib() {
     return out;
   }
 
-  async function buildBundleJson(entries, prompt, notes) {
-    var files = [];
+  function aad(handoffId, objectId) {
+    var domain = objectId === 'manifest' ? 'manifest' : 'file';
+    return new TextEncoder().encode('agent-handoff/v2/' + handoffId + '/' + domain + '/' + objectId);
+  }
+
+  async function buildSplitHandoff(entries, prompt, notes, origin) {
+    var idBytes = crypto.getRandomValues(new Uint8Array(17));
+    var id = b32encode(idBytes).slice(0, 26);
+    var secret = generateSecret();
+    var salt = crypto.getRandomValues(new Uint8Array(16));
+    var iterations = DEFAULT_ITERATIONS;
+    var km = await crypto.subtle.importKey(
+      'raw', new TextEncoder().encode(normalizeSecretInput(secret)), 'PBKDF2', false, ['deriveKey']);
+    var key = await crypto.subtle.deriveKey(
+      { name: 'PBKDF2', salt: salt, iterations: iterations, hash: 'SHA-256' },
+      km, { name: 'AES-GCM', length: 256 }, false, ['encrypt']);
+    async function enc(objectId, plaintext) {
+      var iv = crypto.getRandomValues(new Uint8Array(12));
+      var ct = await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv: iv, additionalData: aad(id, objectId) },
+        key, new TextEncoder().encode(plaintext));
+      return { object_id: objectId, iv: bytesToB64(iv), ciphertext: bytesToB64(new Uint8Array(ct)) };
+    }
+    var manifestFiles = [];
+    var objects = [];
     for (var i = 0; i < entries.length; i++) {
       var e = entries[i];
+      var objectId = 'f' + (i + 1);
       var bytes = new TextEncoder().encode(e.text);
-      files.push({
-        path: normalizeBundlePath(e.path),
+      manifestFiles.push({
+        object_id: objectId,
+        path: e.path,
         media_type: mediaTypeFor(e.path),
         size: bytes.length,
         sha256: await sha256Hex(bytes),
-        content: e.text
+        href: origin + '/v1/handoffs/' + id + '/files/' + objectId + '.txt',
+        json_href: origin + '/v1/handoffs/' + id + '/files/' + objectId
       });
+      objects.push(await enc(objectId, e.text));
     }
-    var bundle = {
-      protocol: 'agent-context-bundle',
-      version: 1,
+    var manifest = {
+      protocol: 'agent-context-bundle', version: 1,
       request: { prompt: prompt || '' },
-      generated_at: new Date().toISOString(),
-      generator: 'agent-bridge-web',
-      files: files
+      generated_at: new Date().toISOString(), generator: 'agent-bridge-web',
+      files: manifestFiles
     };
-    if (notes) bundle.notes = notes;
-    return bundle;
-  }
-
-  async function deriveKeyRaw(secretInput, salt, iterations) {
-    var km = await crypto.subtle.importKey(
-      'raw', new TextEncoder().encode(normalizeSecretInput(secretInput)), 'PBKDF2', false, ['deriveKey']);
-    return crypto.subtle.deriveKey(
-      { name: 'PBKDF2', salt: salt, iterations: iterations, hash: 'SHA-256' },
-      km, { name: 'AES-GCM', length: 256 }, false, ['encrypt']);
-  }
-
-  async function encryptText(plaintext, contentType, iterations) {
-    var salt = crypto.getRandomValues(new Uint8Array(16));
-    var iv = crypto.getRandomValues(new Uint8Array(12));
-    var secret = generateSecret();
-    var key = await deriveKeyRaw(secret, salt, iterations);
-    var ct = await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv: iv }, key, new TextEncoder().encode(plaintext));
+    if (notes) manifest.notes = notes;
+    objects.unshift(await enc('manifest', JSON.stringify(manifest, null, 2)));
     return {
       secret: secret,
-      envelope: {
-        protocol: 'agent-handoff',
-        v: 1,
-        algorithm: 'AES-256-GCM',
-        kdf: 'PBKDF2-SHA256',
-        iterations: iterations,
-        salt: bytesToB64(salt),
-        iv: bytesToB64(iv),
-        ciphertext: bytesToB64(new Uint8Array(ct)),
-        content_type: contentType,
-        encoding: 'utf-8',
-        secret_encoding: 'base32-crockford-grouped-4',
-        secret_normalization: 'strip-hyphens-whitespace-uppercase'
+      body: {
+        protocol: 'agent-handoff', v: 1, layout: 'split', id: id,
+        algorithm: 'AES-256-GCM', kdf: 'PBKDF2-SHA256', iterations: iterations,
+        salt: bytesToB64(salt), content_type: BUNDLE_CONTENT_TYPE,
+        encoding: 'utf-8', secret_encoding: 'base32-crockford-grouped-4',
+        secret_normalization: 'strip-hyphens-whitespace-uppercase',
+        objects: objects
       }
     };
-  }
-
-  async function encryptBundle(bundle, iterations) {
-    return encryptText(JSON.stringify(bundle, null, 2), BUNDLE_CONTENT_TYPE, iterations || DEFAULT_ITERATIONS);
   }
 
   return {
@@ -241,8 +240,6 @@ export const CREATE_LIB_SOURCE = `(function bridgeCreateLib() {
     pathFindingFor: pathFindingFor,
     firewallCheckFile: firewallCheckFile,
     normalizeBundlePath: normalizeBundlePath,
-    buildBundleJson: buildBundleJson,
-    encryptText: encryptText,
-    encryptBundle: encryptBundle
+    buildSplitHandoff: buildSplitHandoff
   };
 })()`;
