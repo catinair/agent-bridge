@@ -82,9 +82,10 @@ Design decisions worth knowing:
   support in Node or browser WebCrypto, and the zero-dependency browser
   viewer needs the same KDF the CLI uses. 600k PBKDF2 meets the current
   OWASP recommendation for this construction.
-- **No burn-after-read** — web-retrieval agents legitimately retry the same
-  URL; one-shot semantics would trade reliability for a marginal gain the
-  5-minute TTL already provides.
+- **Read lease, not one-shot deletion** — web-retrieval agents legitimately
+  retry the same URL, so the first read claims a 3-minute read lease instead
+  of deleting immediately; when the lease ends, the whole bundle burns.
+  Never-claimed drops expire unread after 5 minutes.
 - **No accounts, no history, no dashboard** — it is a relay, not a platform.
 
 Scope clarification: burn after reading applies to **the bridge**, not the
@@ -290,8 +291,8 @@ src/
 
 Deliberately **not** built: accounts, projects, handoff history, permanent
 storage, vector databases, bidirectional sync, WebSockets, OAuth, dashboards,
-burn-after-read. It is a relay, not a platform — see `CHANGELOG.md` for the
-reasoning behind each cut.
+one-shot delete-on-first-read. It is a relay, not a platform — see
+`CHANGELOG.md` for the reasoning behind each cut.
 
 ## License
 

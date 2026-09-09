@@ -189,7 +189,8 @@ bridge config --url https://... --token ...   # 重新配置（或用 BRIDGE_URL
 传多个文件或带 `--prompt` 即进入 Bundle 模式：**原始文件原样传输**，本地 Agent 只做
 "选文件 + 写一句请求"，不做有损总结；解密后是结构化 JSON（`files[].path/media_type/
 size/sha256/content`），远端 Agent 直接阅读原文。二进制或被防火墙拒绝的文件会被
-**无条件剔除（Bundle 模式无豁免）**；单文件且无 `--prompt` 时保持原 HANDOFF 模式。
+**fail closed：存在被拒文件时中止整次创建**，明确列出后由用户自行移除；
+单文件且无 `--prompt` 时保持原 HANDOFF 模式。
 
 给本地 Agent 的固定工作流（可写进 AGENTS.md）：
 

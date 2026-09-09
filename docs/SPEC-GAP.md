@@ -19,7 +19,7 @@
 | 14 JSON + text fallback | ✅ | 记录级、manifest、逐对象均有 |
 | 15 ciphertext 分块（500–800 字符） | ✅ | 600 字符有序 chunks |
 | 16–17 Context Firewall（fail closed） | ✅ | 路径默认拒绝 + 凭据扫描 + 熵/体积启发 |
-| 18 `--allow-secrets` 显式豁免（不得自动触发） | ✅ | 必须携带人类理由并回显；Bundle 模式无豁免（直接剔除） |
+| 18 `--allow-secrets` 显式豁免（不得自动触发） | ✅ | 必须携带人类理由并回显；Bundle 模式 fail closed（中止创建），CLI 显式理由可覆盖 |
 | 19 上传令牌与 handoff secret 分离 | ✅ | 一直如此 |
 | 20 令牌记住默认 OFF + Bridge settings 折叠 + 帮助文案 | 🔧 | 本轮修复 |
 | 21–25 Claim / read lease / bundle-level burn / UI 状态 | 🔧 | 本轮实现：首次 manifest/object 读取即 claim；read lease 默认 180s（可配 30–3600）→ 到期 bundle-level burn（410 + tombstone）；`/status` 端点 + 结果页/查看页生命周期显示 |
