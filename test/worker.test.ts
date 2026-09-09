@@ -279,6 +279,57 @@ describe('worker', () => {
     expect(html).not.toContain('AGENTS.md');
   });
 
+  it('lifecycle: anonymous read claims; lease expiry burns (410) with tombstone', async () => {
+    const created = await createHandoff(env);
+    const { id } = (await created.json()) as { id: string };
+
+    // sender-authenticated read does NOT claim
+    await worker.fetch(
+      req('/v1/handoffs/' + id, { headers: { Authorization: 'Bearer ' + TOKEN } }),
+      env,
+    );
+    let stored = JSON.parse((await env.HANDOFFS.get('h:' + id)) as string);
+    expect(stored.claimed_at).toBeUndefined();
+
+    // first anonymous read claims (60s read lease, hard KV TTL)
+    const r1 = await worker.fetch(req('/v1/handoffs/' + id), env);
+    expect(r1.status).toBe(200);
+    stored = JSON.parse((await env.HANDOFFS.get('h:' + id)) as string);
+    expect(typeof stored.claimed_at).toBe('string');
+
+    // status endpoint reflects claimed state without claiming others
+    const st = await worker.fetch(req('/v1/handoffs/' + id + '/status'), env);
+    const stBody = (await st.json()) as { status: string; lease_remaining_seconds: number };
+    expect(stBody.status).toBe('claimed');
+    expect(stBody.lease_remaining_seconds).toBeGreaterThan(0);
+
+    // simulate lease expiry: age claimed_at beyond the lease
+    stored.claimed_at = new Date(Date.now() - 61_000).toISOString();
+    await env.HANDOFFS.put('h:' + id, JSON.stringify(stored));
+    const burned = await worker.fetch(req('/v1/handoffs/' + id), env);
+    expect(burned.status).toBe(410);
+    expect(((await burned.json()) as { error: string }).error).toBe('burned');
+
+    // tombstone keeps answering 410 (distinct from never-existing 404)
+    expect((await worker.fetch(req('/v1/handoffs/' + id), env)).status).toBe(410);
+
+    // KV TTL may delete the data before anyone reads again: the claim sidecar
+    // alone must still produce a stable 410 (lazy tombstone)
+    await env.HANDOFFS.put('c:' + id, JSON.stringify({ claimed_at: new Date().toISOString(), lease_until: new Date(Date.now() - 1000).toISOString() }), { expirationTtl: 3600 });
+    expect((await worker.fetch(req('/v1/handoffs/' + id), env)).status).toBe(410);
+    const st2 = await worker.fetch(req('/v1/handoffs/' + id + '/status'), env);
+    expect(((await st2.json()) as { status: string }).status).toBe('burned');
+  });
+
+  it('status endpoint reports unclaimed before any read', async () => {
+    const created = await createHandoff(env);
+    const { id } = (await created.json()) as { id: string };
+    const st = await worker.fetch(req('/v1/handoffs/' + id + '/status'), env);
+    const body = (await st.json()) as { status: string; expires_if_unread_in_seconds: number };
+    expect(body.status).toBe('unclaimed');
+    expect(body.expires_if_unread_in_seconds).toBeGreaterThan(0);
+  });
+
   it('returns 404 (not distinguishable from expired) for unknown ids', async () => {
     const res = await worker.fetch(req('/v1/handoffs/AAAAAAAAAAAAAAAAAAAAAAAAAA'), env);
     expect(res.status).toBe(404);

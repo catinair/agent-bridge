@@ -36,7 +36,9 @@ ChatGPT / 浏览器      ←── 拉取密文，本地解密（WebCrypto）
 
 落实的关键需求：
 
-- 默认 TTL **300 秒**（可调 60–3600），KV `expirationTtl` 硬删除 + 读取时二次校验 `expires_at`
+- **Burn after reading 生命周期**：未领取时 5 分钟 fallback TTL；首次读取即 claim，
+  进入 60 秒读取窗口（可重复读取），窗口结束整体销毁（410 Gone + tombstone）
+- **客户端加密**：AES-256-GCM（认证加密），密钥 = PBKDF2-SHA256(secret, salt, 600k 迭代)
 - **客户端加密**：AES-256-GCM（认证加密），密钥 = PBKDF2-SHA256(secret, salt, 600k 迭代)
 - 密码 160 bit CSPRNG，Crockford Base32 展示为 `XXXX-XXXX-…`；**从不出现在 URL / 服务器 / 日志**
 - ID 130 bit 随机，不可枚举
@@ -44,6 +46,8 @@ ChatGPT / 浏览器      ←── 拉取密文，本地解密（WebCrypto）
 - 所有响应 `Cache-Control: no-store`、`X-Robots-Tag: noindex, nofollow`、`Referrer-Policy: no-referrer`
 - 每分钟每 IP 读取限流（默认 60，KV 近似计数）+ 上传限流
 - **Context Firewall**：上传前强制路径策略 / 凭据扫描 / 熵异常检测（见下）
+- 说明："阅后即焚"指 Bridge 中的临时密文在领取后销毁；内容一旦交付给目标 AI，
+  其后续处理与保留遵循对应 AI 服务自身的数据政策
 - 明文上限 2 MB；服务器校验信封格式、迭代次数、TTL 范围
 - 服务器不记录任何请求体；`[observability] enabled = false`
 

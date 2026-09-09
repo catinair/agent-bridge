@@ -90,9 +90,11 @@ export interface FetchResult {
   message?: string;
 }
 
-export async function fetchEnvelope(baseUrl: string, id: string): Promise<FetchResult> {
+export async function fetchEnvelope(baseUrl: string, id: string, uploadToken?: string): Promise<FetchResult> {
   await configureProxy(baseUrl);
-  const res = await fetch(root(baseUrl) + '/v1/handoffs/' + encodeURIComponent(id));
+  const headers: Record<string, string> = {};
+  if (uploadToken) headers.Authorization = 'Bearer ' + uploadToken;
+  const res = await fetch(root(baseUrl) + '/v1/handoffs/' + encodeURIComponent(id), { headers });
   const data: unknown = await res.json().catch(() => ({}));
   if (!res.ok) {
     const msg =

@@ -195,7 +195,7 @@ async function push(args: string[]): Promise<void> {
   // locally to prove the whole chain works before the user shares anything.
   let verified = false;
   try {
-    const back = await fetchEnvelope(cfg.baseUrl, created.id);
+    const back = await fetchEnvelope(cfg.baseUrl, created.id, cfg.uploadToken);
     if (back.status === 200 && back.envelope) {
       const roundtrip = await decryptHandoff(back.envelope, secret);
       verified = roundtrip === plaintext;
@@ -372,7 +372,7 @@ async function bundlePush(fileList: string[], opts: BundlePushOptions): Promise<
 
   let verified = false;
   try {
-    const back = await fetchEnvelope(cfg.baseUrl, created.id);
+    const back = await fetchEnvelope(cfg.baseUrl, created.id, cfg.uploadToken);
     if (back.status === 200 && back.envelope) {
       const remote = back.envelope as unknown as {
         id: string;
@@ -417,6 +417,7 @@ async function bundlePush(fileList: string[], opts: BundlePushOptions): Promise<
   console.log(`
 Context Bundle ready ✅（${manifestFiles.length} 个文件独立加密，共 ${humanSize(totalBytes)}，已回读逐文件校验）
 Request: ${opts.prompt || '（未提供——建议附一句你想让对方解决什么）'}
+Status:   Unclaimed（首次被读取即 claim，进入 60 秒读取窗口后销毁）
 URL:      ${created.url}
 API:      ${created.api_url}
 Password: ${secret}

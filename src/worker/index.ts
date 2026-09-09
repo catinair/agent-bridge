@@ -81,6 +81,61 @@ async function listObjectIds(env: Env, id: string): Promise<string[]> {
   }
 }
 
+const CLAIM_SIDECAR_PREFIX = 'c:';
+const BURN_TOMBSTONE_PREFIX = 'b:';
+const BURN_TOMBSTONE_TTL = 86_400;
+
+function leaseSeconds(env: Env): number {
+  const parsed = parseInt(env.READ_LEASE_SECONDS ?? '60', 10);
+  if (!Number.isFinite(parsed)) return 60;
+  return Math.min(3600, Math.max(30, parsed));
+}
+
+/** Permanently remove the payload and leave a tombstone so reads return 410 Gone. */
+async function burn(env: Env, id: string, status: string, at: string): Promise<void> {
+  await env.HANDOFFS.delete(DATA_PREFIX + id);
+  await env.HANDOFFS.put(BURN_TOMBSTONE_PREFIX + id, JSON.stringify({ status, at }), {
+    expirationTtl: BURN_TOMBSTONE_TTL,
+  });
+}
+
+/** Lifecycle status without claiming: unclaimed | claimed | burned | expired | unknown. */
+async function lifecycleStatus(env: Env, id: string): Promise<Record<string, unknown>> {
+  const now = Date.now();
+  const data = await env.HANDOFFS.get(DATA_PREFIX + id);
+  if (data !== null) {
+    try {
+      const record = JSON.parse(data) as { expires_at?: string; claimed_at?: string };
+      const expiresAt = Date.parse(record.expires_at ?? '');
+      if (Number.isFinite(expiresAt) && expiresAt <= now) {
+        return { status: 'expired' };
+      }
+      if (record.claimed_at) {
+        const claimedAt = Date.parse(record.claimed_at);
+        const leaseUntil = claimedAt + leaseSeconds(env) * 1000;
+        return { status: 'claimed', lease_remaining_seconds: Math.max(0, Math.ceil((leaseUntil - now) / 1000)) };
+      }
+      return {
+        status: 'unclaimed',
+        expires_if_unread_in_seconds: Number.isFinite(expiresAt) ? Math.max(0, Math.ceil((expiresAt - now) / 1000)) : null,
+      };
+    } catch {
+      return { status: 'unknown' };
+    }
+  }
+  const tombstone = await env.HANDOFFS.get(BURN_TOMBSTONE_PREFIX + id);
+  if (tombstone) {
+    const t = JSON.parse(tombstone) as { status: string; at: string };
+    return { status: 'burned', burned_at: t.at };
+  }
+  const sidecar = await env.HANDOFFS.get(CLAIM_SIDECAR_PREFIX + id);
+  if (sidecar) {
+    const sc = JSON.parse(sidecar) as { lease_until: string };
+    return { status: 'burned', burned_at: sc.lease_until };
+  }
+  return { status: 'unknown' };
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -94,6 +149,22 @@ export default {
 
     if (method === 'POST' && path === '/v1/handoffs') {
       return createHandoff(request, env, url);
+    }
+
+    const statusMatch = /^\/v1\/handoffs\/([A-Za-z0-9]+)\/status$/.exec(path);
+    if (statusMatch && method === 'GET') {
+      if (!(await rateLimit(env, request, 'status', 120))) {
+        return error(429, 'rate_limited', 'too many requests from this address');
+      }
+      const sid = statusMatch[1] ?? '';
+      const status = await lifecycleStatus(env, sid);
+      if (status.status === 'burned') {
+        return json({ status: 'burned', burned_at: status.burned_at }, 410);
+      }
+      if (status.status === 'unknown') {
+        return json({ status: 'unknown' }, 404);
+      }
+      return json(status);
     }
 
     const manifestMatch = /^\/v1\/handoffs\/([A-Za-z0-9]+)\/manifest\.txt$/.exec(path);
@@ -297,6 +368,7 @@ async function createSplitHandoff(
     url: `${url.origin}/h/${id}`,
     api_url: `${url.origin}/v1/handoffs/${id}`,
     manifest_url: `${url.origin}/v1/handoffs/${id}/manifest.txt`,
+    status: 'unclaimed',
     created_at: record.created_at,
     expires_at: record.expires_at,
   });
@@ -306,9 +378,9 @@ async function createSplitHandoff(
 async function objectResponse(env: Env, id: string, request: Request, objectId: string, asText: boolean): Promise<Response> {
   const record = await readRecordForTransfer(env, id, request);
   if (typeof record === 'number') {
-    return record === 429
-      ? error(429, 'rate_limited', 'too many requests from this address')
-      : error(404, 'not_found', 'handoff not found or expired');
+    if (record === 429) return error(429, 'rate_limited', 'too many requests from this address');
+    if (record === 410) return error(410, 'burned', 'This context has been claimed and burned.');
+    return error(404, 'not_found', 'handoff not found or expired');
   }
   if (record.layout !== SPLIT_LAYOUT) return error(404, 'not_found', 'handoff not found or expired');
 
@@ -350,16 +422,33 @@ async function objectResponse(env: Env, id: string, request: Request, objectId: 
 }
 
 /**
- * Fetch + validate a record for transfer; returns the parsed record or an
- * HTTP status number (404 expired/missing, 429 rate limited).
+ * Fetch + validate a record for transfer. The first anonymous read claims the
+ * handoff and starts a short read lease; when the lease expires the payload
+ * is burned (deleted + tombstoned). Sender-authenticated reads (Bearer upload
+ * token, e.g. the CLI's post-upload verification) never claim and never
+ * extend the lease. Returns the parsed record, or an HTTP status number
+ * (404 expired/missing, 410 burned after claim, 429 rate limited).
  */
 async function readRecordForTransfer(env: Env, id: string, request: Request): Promise<Record<string, unknown> | number> {
   const perMin = parseInt(env.RATE_LIMIT_PER_MIN ?? '60', 10);
   const limit = Number.isFinite(perMin) && perMin > 0 ? perMin : 60;
   if (!(await rateLimit(env, request, 'read', limit))) return 429;
 
+  const sender = await verifyBearerToken(request, env.BRIDGE_UPLOAD_TOKEN);
   const stored = await env.HANDOFFS.get(DATA_PREFIX + id);
-  if (stored === null) return 404;
+  if (stored === null) {
+    // KV TTL removed the payload without running our code; if a claim sidecar
+    // still exists the handoff was claimed and burned — create the tombstone
+    // lazily so every later read gets a stable 410 Gone.
+    if (await env.HANDOFFS.get(BURN_TOMBSTONE_PREFIX + id)) return 410;
+    const sidecar = await env.HANDOFFS.get(CLAIM_SIDECAR_PREFIX + id);
+    if (sidecar) {
+      const sc = JSON.parse(sidecar) as { lease_until: string };
+      await burn(env, id, 'burned', sc.lease_until);
+      return 410;
+    }
+    return 404;
+  }
   let record: Record<string, unknown>;
   try {
     record = JSON.parse(stored) as Record<string, unknown>;
@@ -371,15 +460,33 @@ async function readRecordForTransfer(env: Env, id: string, request: Request): Pr
     await env.HANDOFFS.delete(DATA_PREFIX + id);
     return 404;
   }
+
+  const lease = leaseSeconds(env);
+  if (!record.claimed_at) {
+    if (sender) return record; // sender verification: read without claiming
+    const claimedAt = new Date().toISOString();
+    record.claimed_at = claimedAt;
+    // hard burn deadline: KV TTL removes the payload even if no one reads again
+    await env.HANDOFFS.put(DATA_PREFIX + id, JSON.stringify(record), { expirationTtl: Math.max(60, lease) });
+    await env.HANDOFFS.put(CLAIM_SIDECAR_PREFIX + id, JSON.stringify({ claimed_at: claimedAt, lease_until: new Date(Date.now() + lease * 1000).toISOString() }), { expirationTtl: lease + 3600 });
+  } else {
+    // claimed: enforce the lease window
+    const leaseUntil = Date.parse(String(record.claimed_at)) + leaseSeconds(env) * 1000;
+    if (Date.now() > leaseUntil) {
+      await burn(env, id, 'burned', new Date(leaseUntil).toISOString());
+      return 410;
+    }
+    if (sender) return record;
+  }
   return record;
 }
 
 async function readHandoff(env: Env, id: string, request: Request, asText = false): Promise<Response> {
   const record = await readRecordForTransfer(env, id, request);
   if (typeof record === 'number') {
-    return record === 429
-      ? error(429, 'rate_limited', 'too many requests from this address')
-      : error(404, 'not_found', 'handoff not found or expired');
+    if (record === 429) return error(429, 'rate_limited', 'too many requests from this address');
+    if (record === 410) return error(410, 'burned', 'This context has been claimed and burned.');
+    return error(404, 'not_found', 'handoff not found or expired');
   }
 
   if (asText) {
@@ -483,19 +590,26 @@ const LANDING_PAGE_HTML = `<!doctype html>
        agent — without exposing your machine or repository.</p>
     <div>
       <span class="pill">Client-side encrypted</span>
-      <span class="pill">5-minute expiry</span>
+      <span class="pill">Burn after reading</span>
       <span class="pill">Self-hosted</span>
-      <span class="pill">Zero-knowledge server</span>
+      <span class="pill">Zero-knowledge</span>
     </div>
     <p style="margin-top:1.25rem">Drop a few files into the browser, write one sentence about what
        the AI should do, and paste the generated link + password into any chat. The files are
-       screened and encrypted locally; this server only ever stores ciphertext and hard-deletes
-       it after five minutes. Agents can also push programmatically via the
+       screened and encrypted locally; this server only ever stores ciphertext — and burns it
+       once it has been read. Agents can also push programmatically via the
        <code>/v1</code> API (see the repository README).</p>
-    <a class="btn" href="/new">Create a secure handoff →</a>
-    <a class="btn ghost" href="/health">Status</a>
+    <p style="margin-top:1rem"><strong style="color:#c7cdd8">How it works</strong></p>
+    <p style="margin:0.25rem 0">1. <strong style="color:#c7cdd8">Select context</strong> — choose only the files the AI needs.<br>
+       2. <strong style="color:#c7cdd8">Encrypt locally</strong> — the bridge receives ciphertext only.<br>
+       3. <strong style="color:#c7cdd8">Send &amp; burn</strong> — the AI gets the context; the bridge does not keep it.</p>
+    <a class="btn" href="/new">Create a context drop →</a>
     <p style="margin-top:1.5rem">Received a link? Open it and enter the password you received
        separately: <code>/h/&lt;id&gt;</code>. The password never reaches this server.</p>
+    <p class="foot" style="margin-top:1.5rem;font-size:0.78rem;color:#8b93a3">
+       <a href="https://github.com/agent-bridge" style="color:#8b93a3">GitHub</a> ·
+       <a href="/v1" style="color:#8b93a3">API</a> ·
+       <a href="/health" style="color:#8b93a3">Health</a></p>
   </div>
 </body>
 </html>`;

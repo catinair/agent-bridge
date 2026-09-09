@@ -1,7 +1,10 @@
 # agent-bridge
 
-> Self-destructing, end-to-end-encrypted context handoffs between your local
-> coding agents and reasoning agents (ChatGPT, Claude, Gemini, …).
+> Give AI context, not access.
+>
+> A self-hosted, zero-knowledge, burn-after-reading context bridge:
+> securely hand selected local project context to ChatGPT, Claude, Gemini,
+> or any remote agent — without exposing your machine or repository.
 >
 > [中文文档](./README.zh-CN.md)
 
@@ -41,7 +44,10 @@ you:
 
 - **Zero-knowledge server** — the Worker only ever sees ciphertext; the
   password never leaves your machine and the recipient's head
-- **5-minute TTL** — KV hard-deletes the payload; expired links return 404
+- **Burn after reading** — the first read claims the handoff and starts a
+  short read lease; when the lease ends the payload is burned. If never
+  claimed, it expires unread (5-minute fallback TTL)
+- **Leave nothing on the bridge** — bundle-level burn; no history, no archive
 - **URL/secret separation** — neither half is useful alone
 - **Context Firewall** — uploads are screened for credentials *before* they
   are encrypted (a strong cipher safely shipping a leaked key is still a leak)
@@ -76,6 +82,10 @@ Design decisions worth knowing:
   URL; one-shot semantics would trade reliability for a marginal gain the
   5-minute TTL already provides.
 - **No accounts, no history, no dashboard** — it is a relay, not a platform.
+
+Scope clarification: burn after reading applies to **the bridge**, not the
+recipient — once delivered, the receiving AI service handles the context
+according to its own data and retention policies.
 
 ## Quickstart (your own Cloudflare account; the free plan is enough)
 

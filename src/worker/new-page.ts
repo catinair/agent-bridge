@@ -2,11 +2,10 @@
  * GET /new — human-facing Context Bundle creator.
  *
  * Everything happens in the browser: files are read locally, screened by the
- * same firewall rules as the CLI, assembled into a Context Bundle, encrypted
- * with WebCrypto, and only the ciphertext is POSTed to the Worker. The page
- * needs the long-term upload token (same one the CLI uses); it can be
- * remembered in localStorage — the trade-off of a self-hosted instance is
- * that creators must hold the upload token.
+ * same firewall rules as the CLI, assembled into a split Context Bundle,
+ * encrypted with WebCrypto, and only the ciphertext is POSTed to the Worker.
+ * The page needs the long-term upload token (same one the CLI uses); it may
+ * optionally be remembered in localStorage — remembering is OFF by default.
  */
 import { CREATE_LIB_SOURCE } from './create-lib.js';
 
@@ -15,14 +14,14 @@ export function renderCreatePage(): string {
 }
 
 const CREATE_PAGE_HTML = `<!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
 <meta http-equiv="Content-Security-Policy"
       content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src data:">
-<title>Create a secure handoff</title>
+<title>Create a context drop</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -38,12 +37,16 @@ const CREATE_PAGE_HTML = `<!doctype html>
   #drop.over { border-color: #4c8dff; color: #c7cdd8; }
   #drop input { display: none; }
   .label { font-size: 0.85rem; color: #8b93a3; margin: 1.25rem 0 0.4rem; }
+  .label strong { color: #c7cdd8; font-weight: 600; }
   #files { margin-top: 0.75rem; font-size: 0.85rem; }
-  .f { display: flex; gap: 0.5rem; padding: 0.3rem 0.2rem; border-bottom: 1px solid #1d222c; }
+  #totals { margin-top: 0.5rem; font-size: 0.8rem; color: #8b93a3; }
+  .f { display: flex; gap: 0.5rem; padding: 0.3rem 0.2rem; border-bottom: 1px solid #1d222c; align-items: center; }
   .f:last-child { border-bottom: 0; }
   .f.ok { color: #c7cdd8; }
   .f.bad { color: #ff7a7a; }
+  .f .path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .f .sz { color: #8b93a3; margin-left: auto; }
+  .f .rm { background: none; border: 0; color: #8b93a3; cursor: pointer; font-size: 0.9rem; padding: 0 0.2rem; }
   textarea, input[type=password], input[type=text] { width: 100%; font-size: 0.95rem;
       padding: 0.65rem 0.8rem; border-radius: 8px; border: 1px solid #2c3442;
       background: #0f1115; color: #e6e6e6; }
@@ -57,65 +60,87 @@ const CREATE_PAGE_HTML = `<!doctype html>
   #create { flex: 1; padding: 0.8rem; font-size: 1rem; }
   .msg { margin-top: 1rem; font-size: 0.9rem; min-height: 1.2em; white-space: pre-wrap; }
   .msg.err { color: #ff7a7a; }
-  .remember { display: flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; color: #8b93a3; }
+  .remember { display: flex; align-items: flex-start; gap: 0.45rem; font-size: 0.8rem;
+              color: #8b93a3; margin-top: 0.5rem; line-height: 1.45; }
+  .remember input { margin-top: 0.15rem; }
+  details.settings { margin-top: 1.25rem; border: 1px solid #262c38; border-radius: 8px; }
+  details.settings summary { cursor: pointer; padding: 0.6rem 0.8rem; font-size: 0.85rem; color: #8b93a3; }
+  details.settings .inner { padding: 0.25rem 0.8rem 0.9rem; }
   #result { display: none; }
+  .statusline { margin: 0.75rem 0 0; font-size: 0.85rem; }
+  .statusline .dot { color: #ffc46b; }
   #result .box { margin-top: 0.75rem; padding: 0.8rem 1rem; background: #0f1115;
                  border: 1px solid #262c38; border-radius: 8px; font-size: 0.9rem;
                  white-space: pre-wrap; word-break: break-word; line-height: 1.6; }
-  .k { color: #8b93a3; font-size: 0.78rem; margin-bottom: 0.2rem; }
+  .k { color: #8b93a3; font-size: 0.78rem; margin-bottom: 0.2rem; margin-top: 1rem; }
   .copyline { display: flex; gap: 0.5rem; align-items: stretch; margin-top: 0.9rem; }
   .copyline .box { flex: 1; margin-top: 0; }
   .copyline button { background: #2c3442; }
   #countdown { color: #8b93a3; font-size: 0.85rem; margin-top: 1rem; }
   a { color: #4c8dff; }
+  .footer { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid #1d222c;
+            font-size: 0.75rem; color: #8b93a3; }
 </style>
 </head>
 <body>
 <div class="card">
   <div id="form">
-    <h1>🔐 Create a secure handoff</h1>
-    <p class="sub">文件在<b>你的浏览器本地</b>完成防火墙检查与加密，服务器只收到密文。
-       5 分钟后自动销毁。</p>
+    <h1>🔐 Create a context drop</h1>
+    <p class="sub">Files are screened and encrypted locally in your browser.
+       The bridge receives ciphertext only — and burns it after reading.</p>
 
     <div id="drop">
-      拖拽文件到此处，或 <a href="#" id="pick">点击选择</a><br>
-      <span style="font-size:0.78rem">.md · .txt · .json · .yaml · .ts · .py · .sql · html · css …（仅文本）</span>
+      Drop files here, or <a href="#" id="pick">browse</a><br>
+      <span style="font-size:0.78rem">.md · .txt · .json · .yaml · .ts · .py · .sql · html · css … (text only)</span>
       <input id="file" type="file" multiple>
     </div>
     <div id="files"></div>
+    <div id="totals"></div>
 
-    <div class="label">你想让 AI 做什么（随交接一起发送）</div>
-    <textarea id="prompt" placeholder="例如：帮我 review 这几份文档里的方案，重点看逻辑漏洞和遗漏"></textarea>
+    <div class="label"><strong>What do you want the AI to do?</strong></div>
+    <textarea id="prompt" placeholder="e.g. Review the current model-routing design. Is it over-designed? Which tasks deserve a flagship model?"></textarea>
 
-    <div class="label">补充说明（可选：文件之间的关系、阅读顺序）</div>
-    <textarea id="notes" style="min-height:3rem" placeholder="例如：docs/architecture.md 是核心设计；config/models.yaml 是实际配置，注意两者差异"></textarea>
+    <div class="label">Additional context <span style="opacity:.7">(optional — file relationships, reading order, known differences)</span></div>
+    <textarea id="notes" style="min-height:3rem" placeholder="e.g. docs/model-routing.md is the design doc; config/models.yaml is the live config and may be out of sync"></textarea>
 
-    <div class="label">上传令牌（BRIDGE_UPLOAD_TOKEN，仅用于本次加密上传）</div>
-    <input id="token" type="password" placeholder="与 CLI 共用同一个令牌" autocomplete="off">
-    <div class="remember" style="margin-top:0.5rem">
-      <input id="remember" type="checkbox" checked>
-      <span>记住令牌（保存在本浏览器 localStorage，仅限你自己的设备）</span>
-    </div>
+    <details class="settings">
+      <summary>Bridge settings</summary>
+      <div class="inner">
+        <div class="label" style="margin-top:0.6rem">Upload token <span style="opacity:.7">(same token the CLI uses)</span></div>
+        <input id="token" type="password" autocomplete="off">
+        <div class="remember">
+          <input id="remember" type="checkbox">
+          <span>Remember upload token on this device.<br>
+          Remembering lets this browser create future handoffs.
+          Only enable this on a trusted personal device.</span>
+        </div>
+      </div>
+    </details>
 
     <div class="row">
-      <button id="create">创建安全交接</button>
-      <button id="reset" class="secondary">重置</button>
+      <button id="create">Create a context drop</button>
+      <button id="reset" class="secondary">Reset</button>
     </div>
     <div id="msg" class="msg"></div>
   </div>
 
   <div id="result">
     <h1>✅ Handoff ready</h1>
+    <div class="statusline"><span class="dot">●</span> <span id="statusText">Unclaimed</span></div>
     <p id="countdown"></p>
-    <div class="k">URL（给人 / Agent 打开的页面）</div>
-    <div class="copyline"><div id="rUrl" class="box"></div><button id="cUrl">复制</button></div>
-    <div class="k" style="margin-top:1rem">密码（与 URL 分开发送）</div>
-    <div class="copyline"><div id="rPwd" class="box"></div><button id="cPwd">复制</button></div>
-    <div class="k" style="margin-top:1rem">粘给 ChatGPT / Claude 的四行</div>
+    <div class="k">URL (page for humans and agents)</div>
+    <div class="copyline"><div id="rUrl" class="box"></div><button id="cUrl">Copy</button></div>
+    <div class="k" style="margin-top:1rem">Password (send separately from the URL)</div>
+    <div class="copyline"><div id="rPwd" class="box"></div><button id="cPwd">Copy</button></div>
+    <div class="k" style="margin-top:1rem">Paste into ChatGPT / Claude</div>
     <div id="rSnippet" class="box"></div>
     <div class="copyline"><button id="cSnippet" style="flex:1">Copy for ChatGPT</button></div>
-    <p class="sub" style="margin-top:1.5rem">另一个 Tab 想再创建？<a href="/new">重新开始</a></p>
+    <p class="sub" style="margin-top:1.5rem">Creating another one? <a href="/new">Start over</a></p>
   </div>
+
+  <p class="footer">Burn after reading applies to this bridge — once delivered,
+     the receiving AI handles the context according to its own data policy.
+     <a href="/">Home</a></p>
 </div>
 <script>
 const createLib = __CREATE_LIB__;
@@ -124,6 +149,7 @@ const createLib = __CREATE_LIB__;
   var elDrop = document.getElementById('drop');
   var elFile = document.getElementById('file');
   var elFiles = document.getElementById('files');
+  var elTotals = document.getElementById('totals');
   var elPrompt = document.getElementById('prompt');
   var elNotes = document.getElementById('notes');
   var elToken = document.getElementById('token');
@@ -131,7 +157,8 @@ const createLib = __CREATE_LIB__;
   var elMsg = document.getElementById('msg');
   var elCreate = document.getElementById('create');
   var entries = [];   // { path, text }
-  var timer = null;
+  var pendingReads = 0;
+  var timers = [];
 
   function say(text, cls) {
     elMsg.textContent = text;
@@ -140,7 +167,7 @@ const createLib = __CREATE_LIB__;
 
   var saved = null;
   try { saved = localStorage.getItem('bridge_upload_token'); } catch (e) {}
-  if (saved) elToken.value = saved;
+  if (saved) { elToken.value = saved; elRemember.checked = true; }
 
   var elPick = document.getElementById('pick');
   elPick.onclick = function (e) { e.preventDefault(); elFile.click(); };
@@ -152,70 +179,85 @@ const createLib = __CREATE_LIB__;
     addFiles(Array.prototype.slice.call(e.dataTransfer.files));
   };
   elFile.onchange = function () {
-    // snapshot first: clearing input.value empties the live FileList mid-iteration
     var files = Array.prototype.slice.call(elFile.files);
     elFile.value = '';
     addFiles(files);
   };
 
-  function human(n) { return n >= 1024 ? (n / 1024).toFixed(1) + ' KB' : n + ' B'; }
-
-  var pendingReads = 0;
-  function setBusy(b) {
-    elCreate.disabled = b;
-    if (b) say('正在读取文件…');
-    else if (elMsg.className.indexOf('err') < 0) say('就绪，' + entries.length + ' 个文件待加密。');
+  function human(n) {
+    n = Number(n);
+    if (!Number.isFinite(n)) return '';
+    return n >= 1024 ? (n / 1024).toFixed(1) + ' KB' : n + ' B';
+  }
+  function refreshTotals() {
+    var total = entries.reduce(function (s, e) {
+      return s + new TextEncoder().encode(e.text).length;
+    }, 0);
+    elTotals.textContent = entries.length > 0
+      ? entries.length + (entries.length === 1 ? ' file · ' : ' files · ') + human(total)
+      : '';
+  }
+  function removeEntry(path, row) {
+    entries = entries.filter(function (e) { return e.path !== path; });
+    row.remove();
+    refreshTotals();
   }
 
   async function addFiles(fileList) {
     for (var i = 0; i < fileList.length; i++) {
       var f = fileList[i];
-      if (entries.length >= createLib.LIMITS.maxFiles) { say('文件数超过上限 ' + createLib.LIMITS.maxFiles, 'err'); break; }
+      if (entries.length >= createLib.LIMITS.maxFiles) { say('File limit reached (' + createLib.LIMITS.maxFiles + ').', 'err'); break; }
       var row = document.createElement('div');
       row.className = 'f';
-      row.textContent = '读取中… ' + f.name;
+      row.textContent = 'reading… ' + f.name;
       elFiles.appendChild(row);
       pendingReads++;
       elCreate.disabled = true;
       try {
         var buf = new Uint8Array(await f.arrayBuffer());
         var path = createLib.normalizeBundlePath(f.name);
-        if (buf.length > createLib.LIMITS.maxFileBytes) throw new Error('超过单文件大小上限');
-        if (createLib.looksBinary(buf)) throw new Error('二进制文件（仅支持文本）');
-        if (!createLib.isTextPath(path)) throw new Error('非文本扩展名');
+        if (buf.length > createLib.LIMITS.maxFileBytes) throw new Error('exceeds per-file size limit');
+        if (createLib.looksBinary(buf)) throw new Error('binary file (text only)');
+        if (!createLib.isTextPath(path)) throw new Error('not a recognized text type');
         var text = new TextDecoder().decode(buf);
         var fw = createLib.firewallCheckFile(path, text);
         var blockFindings = fw.findings.filter(function (x) { return x.severity === 'block'; });
-        if (fw.blocked) throw new Error('防火墙拒绝：' + blockFindings.map(function (x) { return x.rule + (x.line ? ' (行 ' + x.line + ')' : ''); }).join('；'));
+        if (fw.blocked) throw new Error('blocked by firewall: ' + blockFindings.map(function (x) { return x.rule + (x.line ? ' (line ' + x.line + ')' : ''); }).join('; '));
         entries.push({ path: path, text: text });
         var warns = fw.findings.filter(function (x) { return x.severity === 'warn'; }).length;
         row.className = 'f ok';
         row.textContent = '';
-        row.appendChild(document.createTextNode('✓ ' + path + (warns ? '  ⚠️ ' + warns + ' 条告警' : '')));
+        var p = document.createElement('span');
+        p.className = 'path';
+        p.textContent = '✓ ' + path + (warns ? '  ⚠️ ' + warns + ' warning' + (warns > 1 ? 's' : '') : '');
         var sz = document.createElement('span');
         sz.className = 'sz'; sz.textContent = human(buf.length);
-        row.appendChild(sz);
+        var rm = document.createElement('button');
+        rm.className = 'rm'; rm.textContent = '×'; rm.title = 'remove';
+        rm.onclick = function () { removeEntry(path, row); };
+        row.appendChild(p); row.appendChild(sz); row.appendChild(rm);
       } catch (err) {
         row.className = 'f bad';
-        row.textContent = '✗ ' + f.name + '：' + (err && err.message ? err.message : '无法读取');
-      } finally {
-        pendingReads--;
+        row.textContent = '✗ ' + f.name + '：' + (err && err.message ? err.message : 'could not read');
       }
+      pendingReads--;
+      if (pendingReads === 0) { elCreate.disabled = false; refreshTotals(); }
     }
-    if (pendingReads === 0) setBusy(false);
+    if (pendingReads === 0) elCreate.disabled = false;
   }
 
   elCreate.onclick = async function () {
-    if (pendingReads > 0) { say('文件仍在读取中，请稍候。', 'err'); return; }
-    if (entries.length === 0) { say('请先添加至少一个文件。', 'err'); return; }
+    if (pendingReads > 0) { say('Still reading files — one moment.', 'err'); return; }
+    if (entries.length === 0) { say('Add at least one file first.', 'err'); return; }
     var token = elToken.value.trim();
-    if (!token) { say('需要上传令牌（与 CLI 的 BRIDGE_UPLOAD_TOKEN 相同）。', 'err'); return; }
+    if (!token) { say('Upload token required (the same BRIDGE_UPLOAD_TOKEN the CLI uses).', 'err'); return; }
     if (elRemember.checked) { try { localStorage.setItem('bridge_upload_token', token); } catch (e) {} }
+    else { try { localStorage.removeItem('bridge_upload_token'); } catch (e) {} }
     elCreate.disabled = true;
-    say('🛡 防火墙已通过 → 正在本地构建 Bundle 并加密…');
+    say('🛡 Firewall passed → building bundle and encrypting locally…');
     try {
       var total = entries.reduce(function (s, e) { return s + new TextEncoder().encode(e.text).length; }, 0);
-      if (total > createLib.LIMITS.maxTotalBytes) throw new Error('总大小超过上限 ' + createLib.LIMITS.maxTotalBytes + ' 字节');
+      if (total > createLib.LIMITS.maxTotalBytes) throw new Error('Total size exceeds ' + createLib.LIMITS.maxTotalBytes + ' bytes');
       var prompt = elPrompt.value.trim();
       var notes = elNotes.value.trim();
       var built = await createLib.buildSplitHandoff(entries, prompt, notes, location.origin);
@@ -224,12 +266,12 @@ const createLib = __CREATE_LIB__;
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
         body: JSON.stringify(Object.assign({}, built.body, { expires_in: 300 }))
       });
-      if (res.status === 401) throw new Error('上传令牌无效（HTTP 401）');
-      if (!res.ok) throw new Error('上传失败：HTTP ' + res.status);
+      if (res.status === 401) throw new Error('Upload token invalid (HTTP 401)');
+      if (!res.ok) throw new Error('Upload failed: HTTP ' + res.status);
       var created = await res.json();
-      showResult(created, built.secret, entries.length, total);
+      showResult(created, built.secret, entries.length, prompt, total);
     } catch (err) {
-      say('❌ ' + (err && err.message ? err.message : '创建失败'), 'err');
+      say('❌ ' + (err && err.message ? err.message : 'creation failed'), 'err');
       elCreate.disabled = false;
     }
   };
@@ -251,16 +293,41 @@ const createLib = __CREATE_LIB__;
     document.getElementById('cPwd').onclick = function () { navigator.clipboard.writeText(secret); };
     document.getElementById('cSnippet').onclick = function () {
       navigator.clipboard.writeText(snippet).then(function () {
-        document.getElementById('cSnippet').textContent = '已复制，去粘贴吧';
+        document.getElementById('cSnippet').textContent = 'Copied — go paste it';
       });
     };
-    timer = setInterval(function () {
+    // lifecycle: unclaimed → claimed (read lease) → burned
+    var poll = setInterval(async function () {
+      try {
+        var r = await fetch('/v1/handoffs/' + created.id + '/status');
+        if (r.status === 410) {
+          clearInterval(poll);
+          document.getElementById('statusText').textContent = '🔥 Burned — this context no longer exists';
+          return;
+        }
+        var st = await r.json();
+        var now = Date.now();
+        if (st.status === 'unclaimed') {
+          var left = Math.max(0, st.expires_if_unread_in_seconds || 0);
+          document.getElementById('statusText').textContent = '● Unclaimed — expires if unread in ' + Math.floor(left / 60) + ':' + (left % 60 < 10 ? '0' : '') + (left % 60);
+        } else if (st.status === 'claimed') {
+          var rem = Math.max(0, st.lease_remaining_seconds || 0);
+          document.getElementById('statusText').textContent = '● Claimed — read window ' + Math.floor(rem / 60) + ':' + (rem % 60 < 10 ? '0' : '') + (rem % 60);
+        } else if (st.status === 'expired') {
+          clearInterval(poll);
+          document.getElementById('statusText').textContent = '⏱ Expired unread — nothing was delivered';
+        }
+      } catch (e) { /* transient */ }
+    }, 1500);
+    timers.push(poll);
+    var countdownLine = function () {
       var left = new Date(created.expires_at).getTime() - Date.now();
-      if (left <= 0) { document.getElementById('countdown').textContent = '⏱ 已过期（服务器端已销毁）'; return; }
-      var m = Math.floor(left / 60000), s = Math.floor((left % 60000) / 1000);
-      document.getElementById('countdown').textContent =
-        '⏱ 服务器端 ' + m + ':' + (s < 10 ? '0' : '') + s + ' 后自动销毁';
-    }, 500);
+      document.getElementById('countdown').textContent = left > 0
+        ? '⏱ Unread fallback expiry: ' + Math.ceil(left / 1000) + 's'
+        : '';
+    };
+    countdownLine();
+    timers.push(setInterval(countdownLine, 1000));
   }
 
   document.getElementById('reset').onclick = function () { location.reload(); };

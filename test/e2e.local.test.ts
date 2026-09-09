@@ -117,6 +117,32 @@ describe('end-to-end: CLI -> worker -> retrieval -> decryption', () => {
     expect((await fetch(base + '/v1/handoffs/AAAAAAAAAAAAAAAAAAAAAAAAAA')).status).toBe(404);
   });
 
+  it('lifecycle over real HTTP: claim, in-lease reads, burn (410), status', async () => {
+    const { result } = await pushFile('LIFE.md', 'life cycle', ['--ttl', '300']);
+    expect(result.code).toBe(0);
+    const { api } = parseHandoff(result.stdout);
+
+    // sender token reads (CLI verify) must not have claimed it
+    let st = await (await fetch(api + '/status')).json();
+    expect(st.status).toBe('unclaimed');
+
+    // recipient claims by reading
+    expect((await fetch(api)).status).toBe(200);
+    st = await (await fetch(api + '/status')).json();
+    expect(st.status).toBe('claimed');
+    expect(st.lease_remaining_seconds).toBeGreaterThan(0);
+
+    // simulate lease expiry through the KV mock, then expect 410 burned
+    const id = api.split('/').pop() as string;
+    const stored = JSON.parse((await server.kv.get('h:' + id)) as string) as { claimed_at: string };
+    stored.claimed_at = new Date(Date.now() - 61_000).toISOString();
+    await server.kv.put('h:' + id, JSON.stringify(stored));
+    const after = await fetch(api);
+    expect(after.status).toBe(410);
+    st = await (await fetch(api + '/status')).json();
+    expect(st.status).toBe('burned');
+  }, 90_000);
+
   it('honours short TTL expiry through the KV layer', async () => {
     const { result } = await pushFile('SHORT.md', 'short-lived', ['--ttl', '60']);
     expect(result.code).toBe(0);

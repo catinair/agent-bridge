@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.4.0 — 2026-09-09
+
+**Burn-after-reading lifecycle** (per the V3/open-source release spec):
+
+- Lifecycle: `unclaimed` → (first anonymous read) `claimed` with a 60-second
+  read lease → `burned` (payload deleted, tombstone answers 410 Gone)
+- Unclaimed bundles expire unread after the fallback TTL (default 300s)
+- Sender-authenticated reads (Bearer upload token, used by the CLI's
+  post-upload verification) never claim and never extend the lease
+- New non-claiming lifecycle endpoint: `GET /v1/handoffs/<id>/status`
+- Result page and viewer surface the lifecycle: Unclaimed / Claimed /
+  🔥 Burned; viewer handles 410 with a quiet burn message
+- Web UI: upload-token remembering now defaults OFF (moved into a collapsed
+  "Bridge settings" section), per-file remove buttons, file/size totals,
+  unified English UI, landing three-step explanation and footer links,
+  defensive size formatting (fixes "undefined B")
+- Product positioning updated: "Give AI context, not access." with
+  burn-after-reading as the primary promise (5-minute unread expiry is the
+  fallback); burn applies to the bridge, not the recipient
+
 ## 1.3.2 — 2026-09-09
 
 - `/h/<id>` now server-renders per-object discovery links
@@ -44,6 +64,8 @@
 
 ## 1.2.1 — 2026-09-09
 
+- Lazy burn tombstone: when KV TTL removes a claimed payload before anyone
+  reads again, the claim sidecar still yields a stable 410 Gone
 - Text-envelope fallback: `GET /v1/handoffs/<id>.txt` serves the same
   ciphertext envelope as flat `key: value` text (`text/plain`), for retrieval
   environments that swallow raw JSON bodies; discovered via an additional

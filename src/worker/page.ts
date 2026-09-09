@@ -164,14 +164,16 @@ const VIEWER_PAGE_HTML = `<!doctype html>
 <body>
 <div class="card">
   <h1>🔐 Secure Agent Handoff</h1>
-  <p class="sub">内容为端到端加密，密码只在你本地解密，服务器无法读取。</p>
+  <p class="sub">End-to-end encrypted. The password decrypts locally in your browser — the server never sees it.</p>
   <div class="row">
-    <input id="pwd" type="password" placeholder="输入临时密码（XXXX-XXXX-...）" autocomplete="off" autofocus>
-    <button id="open">解密查看</button>
+    <input id="pwd" type="password" placeholder="Enter the one-time password (XXXX-XXXX-…)" autocomplete="off" autofocus>
+    <button id="open">Decrypt</button>
   </div>
   <div id="msg" class="msg"></div>
   <pre id="content"></pre>
   <div id="meta" class="meta"></div>
+  <p class="hint" style="margin-top:1.5rem">Burn after reading applies to this bridge — once delivered,
+     the receiving AI handles the context according to its own data policy.</p>
   <p class="agent-link">Agent access: <a rel="alternate" type="application/vnd.agent-handoff+json" href="__API_URL__">Agent-readable encrypted JSON</a> · <a rel="alternate" type="text/plain" href="__API_URL__.txt">text envelope</a> at __API_PATH__</p>
   __OBJECT_LINKS__
 </div>
@@ -195,11 +197,16 @@ const bridgeDecryptObject = ${BRIDGE_SPLIT_SOURCE};
 
   fetch('/v1/handoffs/' + id).then(async function (r) {
     if (r.status === 404) {
-      say('不存在或已过期（临时交接在几分钟后自动销毁）。', 'err');
+      say('Not found or expired — context drops self-destruct within minutes.', 'err');
       elPwd.disabled = true; elOpen.disabled = true;
       return;
     }
-    if (!r.ok) { say('读取失败（HTTP ' + r.status + '）。', 'err'); return; }
+    if (r.status === 410) {
+      say('🔥 Burned — this context has been claimed and no longer exists.', 'err');
+      elPwd.disabled = true; elOpen.disabled = true;
+      return;
+    }
+    if (!r.ok) { say('Could not load (HTTP ' + r.status + ').', 'err'); return; }
     envelope = await r.json();
     var exp = envelope.expires_at ? new Date(envelope.expires_at) : null;
     if (exp && exp.getTime() <= Date.now()) {
@@ -213,7 +220,7 @@ const bridgeDecryptObject = ${BRIDGE_SPLIT_SOURCE};
   function countdown() {
     if (!envelope || !envelope.expires_at) return;
     var left = new Date(envelope.expires_at).getTime() - Date.now();
-    if (left <= 0) { elMeta.textContent = '⏱ 已过期（服务器端已销毁）'; return; }
+    if (left <= 0) { elMeta.textContent = '⏱ Expired — burned server-side'; return; }
     var m = Math.floor(left / 60000);
     var s = Math.floor((left % 60000) / 1000);
     elMeta.textContent = '⏱ 服务器端 ' + m + ':' + (s < 10 ? '0' : '') + s + ' 后自动销毁 · 类型 ' + (envelope.content_type || '');
@@ -225,7 +232,7 @@ const bridgeDecryptObject = ${BRIDGE_SPLIT_SOURCE};
     var secret = elPwd.value;
     if (!secret.trim()) { say('请输入密码。', 'warn'); return; }
     elOpen.disabled = true; elPwd.disabled = true;
-    say('正在派生密钥并解密…');
+    say('Deriving key and decrypting…');
     try {
       var t0 = Date.now();
       if (envelope.layout === 'split') {
@@ -247,7 +254,7 @@ const bridgeDecryptObject = ${BRIDGE_SPLIT_SOURCE};
       }
       elMeta.style.display = 'block';
       countdown();
-      say('✅ 解密成功（' + ((Date.now() - t0) / 1000).toFixed(1) + 's）。');
+      say('✅ Decrypted in ' + ((Date.now() - t0) / 1000).toFixed(1) + 's.');
     } catch (e) {
       say('❌ ' + (e && e.message ? e.message : '解密失败'), 'err');
       elPwd.disabled = false; elPwd.select(); elPwd.focus();
@@ -275,7 +282,7 @@ const bridgeDecryptObject = ${BRIDGE_SPLIT_SOURCE};
     if (prompt) {
       var req = document.createElement('div');
       req.className = 'request';
-      req.textContent = '🎯 本次请求：' + prompt;
+      req.textContent = '🎯 Request: ' + prompt;
       wrap.appendChild(req);
     }
     if (manifest.notes) {
@@ -295,7 +302,7 @@ const bridgeDecryptObject = ${BRIDGE_SPLIT_SOURCE};
         s2.textContent = '📄 ' + mf.path + '  ·  ' + mf.size + ' B  ·  ' + (mf.media_type || '');
         d.appendChild(s2);
         var pre = document.createElement('pre');
-        pre.textContent = '（展开时按需解密）';
+        pre.textContent = '(decrypts on expand)';
         d.appendChild(pre);
         d.addEventListener('toggle', function () {
           if (!d.open || d.dataset.done === '1') return;
@@ -303,7 +310,7 @@ const bridgeDecryptObject = ${BRIDGE_SPLIT_SOURCE};
           bridgeDecryptObject(record, mf.object_id, secret).then(function (text) {
             pre.textContent = text;
             var btn = document.createElement('button');
-            btn.textContent = '复制此文件';
+            btn.textContent = 'Copy file';
             btn.className = 'secondary';
             btn.style.margin = '0.5rem 0.8rem 0.8rem';
             btn.onclick = function () {
@@ -327,7 +334,7 @@ const bridgeDecryptObject = ${BRIDGE_SPLIT_SOURCE};
     if (prompt) {
       var req = document.createElement('div');
       req.className = 'request';
-      req.textContent = '🎯 本次请求：' + prompt;
+      req.textContent = '🎯 Request: ' + prompt;
       wrap.appendChild(req);
     }
     var list = document.createElement('div');
@@ -344,7 +351,7 @@ const bridgeDecryptObject = ${BRIDGE_SPLIT_SOURCE};
       pre.textContent = f.content;
       d.appendChild(pre);
       var btn = document.createElement('button');
-      btn.textContent = '复制此文件';
+      btn.textContent = 'Copy file';
       btn.className = 'secondary';
       btn.style.margin = '0.5rem 0.8rem 0.8rem';
       (function (content, b) {
@@ -356,7 +363,7 @@ const bridgeDecryptObject = ${BRIDGE_SPLIT_SOURCE};
       list.appendChild(d);
     }
     wrap.appendChild(list);
-    addCopyButton(rawPlain, '复制完整 Bundle JSON');
+    addCopyButton(rawPlain, 'Copy full bundle JSON');
     elMeta.parentNode.insertBefore(wrap, elMeta);
   }
 
