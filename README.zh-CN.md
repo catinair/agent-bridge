@@ -1,5 +1,7 @@
 # Agent Handoff Bridge（中文文档）
 
+> **Self-hosted · Zero-knowledge · Burn after reading**
+
 [English](./README.md)
 
 > 一个 **5 分钟自毁、客户端加密、服务器零明文、URL 与密钥分离** 的 Agent Context Drop。

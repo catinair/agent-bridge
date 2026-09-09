@@ -115,10 +115,28 @@ function resolveInputFiles(positional: string[]): string[] {
   fail('未指定文件，且当前目录找不到 .ai/HANDOFF.md 或 HANDOFF.md');
 }
 
-/** Path stored inside the bundle: repo-relative when given, basename for absolute inputs. */
+/**
+ * Path stored inside the bundle. Relative inputs are preserved so that
+ * manifest paths match what the user (and their notes) refer to; absolute
+ * inputs are made cwd-relative when possible, falling back to the basename.
+ */
 function bundlePathFor(file: string): string {
-  if (path.isAbsolute(file)) return path.basename(file);
-  return normalizeBundlePath(file);
+  if (!path.isAbsolute(file)) return normalizeBundlePath(file);
+  const rel = path.relative(process.cwd(), file);
+  if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) return normalizeBundlePath(rel);
+  return path.basename(file);
+}
+
+/** Warn when Notes reference files that are not part of the bundle. */
+function warnNotesPathMismatches(notes: string, manifestPaths: string[]): void {
+  if (!notes) return;
+  const referenced = [...notes.matchAll(/[\w./\-]+\.[A-Za-z0-9]{1,8}\b/g)].map((m) => m[0]);
+  const missing = [...new Set(referenced)].filter(
+    (ref) => !manifestPaths.some((p) => p === ref || p.endsWith('/' + ref)),
+  );
+  if (missing.length > 0) {
+    console.log(`⚠️  Notes 引用了未包含在 Bundle 中的文件：${missing.join('、')}（如需评审请加入 push 参数）`);
+  }
 }
 
 async function push(args: string[]): Promise<void> {
@@ -378,6 +396,7 @@ async function bundlePush(fileList: string[], opts: BundlePushOptions): Promise<
     files: manifestFiles,
   };
   if (opts.notes) manifest.notes = opts.notes;
+  warnNotesPathMismatches(opts.notes, manifestFiles.map((f) => f.path));
 
   const record = await buildSplitRecord({
     handoffId,

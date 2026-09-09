@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.0.0 — 2026-09-09
+
+First public release (Release Candidate checks passed 6/6 — see git history
+for the full RC smoke results: fresh-clone deploy, CLI + Web happy paths,
+real ChatGPT black-box consumption, firewall negative path, lifecycle burn
+verification, README reality check).
+
 ## 1.4.3 — 2026-09-09
 
 - **Context Firewall is now fail closed in bundle mode**: any blocked file

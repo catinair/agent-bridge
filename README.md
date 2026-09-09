@@ -6,6 +6,8 @@
 > securely hand selected local project context to ChatGPT, Claude, Gemini,
 > or any remote agent — without exposing your machine or repository.
 >
+> **Self-hosted · Zero-knowledge · Burn after reading**
+>
 > [中文文档](./README.zh-CN.md)
 
 `agent-bridge` is a self-hosted relay for AI-agent handoffs. Your local agent
