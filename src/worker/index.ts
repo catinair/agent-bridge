@@ -3,6 +3,7 @@ import type { Env } from './env.js';
 import { DATA_PREFIX, sha256Hex, verifyBearerToken } from './auth.js';
 import { LIMITS, validateEnvelope } from '../shared/types.js';
 import { renderViewerPage } from './page.js';
+import { renderCreatePage } from './new-page.js';
 
 const ID_LENGTH = 26; // 26 x 5 bits = 130 bits of entropy, non-enumerable
 
@@ -87,6 +88,10 @@ export default {
     if (viewMatch && method === 'GET') {
       const id = viewMatch[1] ?? '';
       return html(renderViewerPage(id, url.origin));
+    }
+
+    if (path === '/new' && method === 'GET') {
+      return html(renderCreatePage());
     }
 
     if (path === '/' && method === 'GET') {
@@ -193,19 +198,41 @@ const LANDING_PAGE_HTML = `<!doctype html>
 <meta name="robots" content="noindex, nofollow">
 <title>Agent Handoff Bridge</title>
 <style>
+  :root { color-scheme: dark; }
   body { font-family: ui-sans-serif, system-ui, sans-serif; background: #0f1115; color: #e6e6e6;
          display: flex; min-height: 100vh; align-items: center; justify-content: center; margin: 0; }
-  .card { max-width: 34rem; padding: 2rem; line-height: 1.6; }
+  .card { max-width: 36rem; padding: 2.5rem; line-height: 1.65; }
+  h1 { font-size: 1.3rem; margin: 0 0 0.4rem; }
+  .tag { color: #c7cdd8; font-size: 0.95rem; margin: 0 0 1.25rem; }
+  .pill { display: inline-block; font-size: 0.75rem; color: #8b93a3; border: 1px solid #2c3442;
+          border-radius: 99px; padding: 0.15rem 0.6rem; margin: 0 0.35rem 0.35rem 0; }
+  p { color: #8b93a3; font-size: 0.88rem; }
+  a.btn { display: inline-block; background: #4c8dff; color: #fff; text-decoration: none;
+          padding: 0.65rem 1.1rem; border-radius: 8px; font-size: 0.95rem; margin: 1rem 0.5rem 0 0; }
+  a.ghost { background: #2c3442; }
   code { background: #1c2029; padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.9em; }
 </style>
 </head>
 <body>
   <div class="card">
-    <h1>Agent Handoff Bridge</h1>
-    <p>This is a zero-knowledge, self-destructing relay for AI-agent handoff documents.
-       The server stores only encrypted payloads for a few minutes.</p>
-    <p>Handoff pages live at <code>/h/&lt;id&gt;</code> and require the one-time password
-       provided separately by the sender. The password never reaches this server.</p>
+    <h1>Give AI agents context, not access.</h1>
+    <p class="tag">Securely hand off local project context to ChatGPT, Claude, or any remote
+       agent — without exposing your machine or repository.</p>
+    <div>
+      <span class="pill">Client-side encrypted</span>
+      <span class="pill">5-minute expiry</span>
+      <span class="pill">Self-hosted</span>
+      <span class="pill">Zero-knowledge server</span>
+    </div>
+    <p style="margin-top:1.25rem">Drop a few files into the browser, write one sentence about what
+       the AI should do, and paste the generated link + password into any chat. The files are
+       screened and encrypted locally; this server only ever stores ciphertext and hard-deletes
+       it after five minutes. Agents can also push programmatically via the
+       <code>/v1</code> API (see the repository README).</p>
+    <a class="btn" href="/new">Create a secure handoff →</a>
+    <a class="btn ghost" href="/health">Status</a>
+    <p style="margin-top:1.5rem">Received a link? Open it and enter the password you received
+       separately: <code>/h/&lt;id&gt;</code>. The password never reaches this server.</p>
   </div>
 </body>
 </html>`;

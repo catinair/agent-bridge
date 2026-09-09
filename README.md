@@ -217,6 +217,23 @@ The receiving agent fetches from its own network and is unaffected by local
 blocks; a custom domain on your Cloudflare account removes the local block
 entirely.
 
+## Web UI
+
+The same Worker serves a minimal UI — no second app, no server:
+
+| Route | Purpose |
+| --- | --- |
+| `/` | Landing: what this is, links to create / open |
+| `/new` | **Create a handoff in the browser**: drag & drop files, write the prompt, see per-file firewall verdicts, encrypt locally (WebCrypto), upload ciphertext |
+| `/h/:id` | Human reader: password → local decryption, bundle-aware rendering |
+| `/v1/…` | Agent API |
+
+Everything the CLI does happens in the browser too — firewall screening, bundle
+assembly, PBKDF2 + AES-GCM. The page holds your upload token (optionally
+remembered in localStorage, device-only) because a self-hosted relay requires
+the sender to authenticate; there is no account. People who just *receive* a
+handoff never need the token.
+
 ## Development
 
 ```bash

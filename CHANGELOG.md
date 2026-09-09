@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.2.0 — 2026-09-09
+
+- **Web UI on the same Worker** — no second app:
+  - `/` landing ("Give AI agents context, not access.")
+  - `/new` browser-based bundle creator: drag & drop, per-file firewall
+    verdicts, prompt + notes, WebCrypto encryption, upload-token handling with
+    optional localStorage remember, result view with Copy for ChatGPT
+  - browser create-lib cross-verified against the shared TypeScript crypto and
+    firewall in tests (encrypt with the page, decrypt with the CLI)
+- Fixed: viewer/create pages now also clear the FileList snapshot bug where
+  only the first selected file was processed
+
 ## 1.1.0 — 2026-09-09
 
 - **Context Bundles**: multi-file pushes where original files travel verbatim
