@@ -210,12 +210,30 @@ const TEXT_FIELD_ORDER = [
   'expires_at',
 ];
 
+/**
+ * Web-retrieval layers truncate very long single lines, so the base64
+ * ciphertext is emitted as an ordered chunk list (~600 chars each).
+ * Receivers concatenate in order without separators, then base64-decode.
+ */
+const CIPHERTEXT_CHUNK_CHARS = 600;
+
 function envelopeToText(record: Record<string, unknown>): string {
   const lines = [
     '# agent-handoff envelope - ciphertext only; decrypt locally with the password provided separately',
+    '# ciphertext_chunks are ordered: concatenate without separators, then base64-decode',
   ];
   for (const key of TEXT_FIELD_ORDER) {
-    if (record[key] !== undefined) lines.push(`${key}: ${String(record[key])}`);
+    if (record[key] === undefined) continue;
+    if (key === 'ciphertext') {
+      const value = String(record[key]);
+      lines.push('ciphertext_encoding: base64');
+      lines.push('ciphertext_chunks:');
+      for (let i = 0; i < value.length; i += CIPHERTEXT_CHUNK_CHARS) {
+        lines.push(`  - ${value.slice(i, i + CIPHERTEXT_CHUNK_CHARS)}`);
+      }
+      continue;
+    }
+    lines.push(`${key}: ${String(record[key])}`);
   }
   return lines.join('\n') + '\n';
 }

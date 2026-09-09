@@ -101,7 +101,8 @@ describe('worker', () => {
   });
 
   it('serves a text/plain envelope fallback at :id.txt (discovery + retrieval)', async () => {
-    const created = await createHandoff(env);
+    // large enough to force multiple ciphertext_chunks
+    const created = await createHandoff(env, '# chunked\n' + 'A'.repeat(1500));
     const { id } = (await created.json()) as { id: string };
 
     const res = await worker.fetch(req('/v1/handoffs/' + id + '.txt'), env);
@@ -111,9 +112,18 @@ describe('worker', () => {
     const text = await res.text();
     expect(text).toContain('algorithm: AES-256-GCM');
     expect(text).toContain('kdf: PBKDF2-SHA256');
-    expect(text).toContain('ciphertext: ');
+    expect(text).toContain('ciphertext_encoding: base64');
+    expect(text).toContain('ciphertext_chunks:');
     expect(text).toContain('expires_at: ');
     expect(text.toLowerCase()).not.toContain('password:');
+
+    // chunked ciphertext must reassemble to exactly the JSON endpoint's value
+    const jsonRes = await worker.fetch(req('/v1/handoffs/' + id), env);
+    const expected = String(((await jsonRes.json()) as Record<string, unknown>).ciphertext);
+    const chunks = [...text.matchAll(/^  - (.+)$/gm)].map((m) => m[1] ?? '');
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const c of chunks) expect(c.length).toBeLessThanOrEqual(600);
+    expect(chunks.join('')).toBe(expected);
 
     // the viewer page server-renders the text-envelope discovery link
     const page = await worker.fetch(req('/h/' + id), env);

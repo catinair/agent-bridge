@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.2 — 2026-09-09
+
+- Text envelope: ciphertext is emitted as an ordered `ciphertext_chunks` list
+  (~600 chars each, concatenate + base64-decode) because web-retrieval layers
+  truncate very long single lines. JSON endpoint unchanged
+
 ## 1.2.1 — 2026-09-09
 
 - Text-envelope fallback: `GET /v1/handoffs/<id>.txt` serves the same
