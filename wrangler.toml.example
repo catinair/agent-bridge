@@ -1,0 +1,13 @@
+name = "agent-bridge"
+main = "src/worker/index.ts"
+compatibility_date = "2026-08-01"
+workers_dev = true
+
+# `npm run setup` copies this file to wrangler.toml (gitignored) and
+# replaces the placeholder with the real namespace id.
+[[kv_namespaces]]
+binding = "HANDOFFS"
+id = "KV_NAMESPACE_ID_PLACEHOLDER"
+
+[observability]
+enabled = false

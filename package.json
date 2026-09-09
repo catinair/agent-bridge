@@ -1,0 +1,34 @@
+{
+  "name": "agent-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Self-destructing E2E-encrypted context handoffs between local coding agents and reasoning agents (Cloudflare Workers + KV)",
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "bridge": "./bin/bridge.js"
+  },
+  "scripts": {
+    "bridge": "tsx src/cli/index.ts",
+    "build": "tsc -p tsconfig.cli.json",
+    "dev": "tsx scripts/dev-server.ts",
+    "test": "vitest run",
+    "setup": "node scripts/setup-deploy.mjs",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc -p tsconfig.cli.json --noEmit && tsc -p tsconfig.worker.json --noEmit"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260908.1",
+    "@types/node": "^22",
+    "tsx": "^4",
+    "typescript": "^5",
+    "vitest": "^3",
+    "wrangler": "^4"
+  },
+  "dependencies": {
+    "undici": "^8.10.2"
+  },
+  "license": "MIT"
+}

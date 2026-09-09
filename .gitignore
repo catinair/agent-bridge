@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.wrangler/
+.dev.vars
+*.log
+.DS_Store
+
+# local deploy config (real KV namespace id) — repo carries wrangler.toml.example
+wrangler.toml
+
+# machine-specific notes
+NOTES.local.md
