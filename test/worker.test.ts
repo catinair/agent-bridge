@@ -235,6 +235,50 @@ describe('worker', () => {
     expect(badId.status).toBe(400);
   });
 
+  it('server-renders per-object discovery links into /h/:id for split records', async () => {
+    const secret = generateSecret();
+    const id = generateHandoffId();
+    const manifest = {
+      protocol: 'agent-context-bundle' as const,
+      version: 1,
+      request: { prompt: 'links' },
+      generated_at: new Date().toISOString(),
+      generator: 'test',
+      files: [
+        { object_id: fileObjectId(0), path: 'AGENTS.md', media_type: 'text/markdown', size: 9, sha256: 'a'.repeat(64) },
+        { object_id: fileObjectId(1), path: 'models.yaml', media_type: 'application/yaml', size: 24, sha256: 'b'.repeat(64) },
+      ],
+    };
+    const record = await buildSplitRecord({
+      handoffId: id,
+      secret,
+      iterations: 600_000,
+      manifest,
+      fileTexts: [
+        { objectId: fileObjectId(0), text: '# 规则\n' },
+        { objectId: fileObjectId(1), text: 'default: gpt-5-mini\n' },
+      ],
+      contentType: 'application/vnd.agent-context-bundle+json',
+    });
+    await worker.fetch(
+      req('/v1/handoffs', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...record, expires_in: 300 }),
+      }),
+      env,
+    );
+
+    const page = await worker.fetch(req('/h/' + id), env);
+    const html = await page.text();
+    expect(html).toContain('aria-label="Agent object endpoints"');
+    expect(html).toContain(`href="https://bridge.example.com/v1/handoffs/${id}/files/manifest.txt">manifest</a>`);
+    expect(html).toContain(`href="https://bridge.example.com/v1/handoffs/${id}/files/f1.txt">object f1</a>`);
+    expect(html).toContain(`href="https://bridge.example.com/v1/handoffs/${id}/files/f2.txt">object f2</a>`);
+    // no plaintext paths leak into the link section
+    expect(html).not.toContain('AGENTS.md');
+  });
+
   it('returns 404 (not distinguishable from expired) for unknown ids', async () => {
     const res = await worker.fetch(req('/v1/handoffs/AAAAAAAAAAAAAAAAAAAAAAAAAA'), env);
     expect(res.status).toBe(404);

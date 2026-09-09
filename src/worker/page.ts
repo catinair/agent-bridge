@@ -91,15 +91,24 @@ export const BRIDGE_SPLIT_SOURCE = `(async function bridgeDecryptObject(record, 
   return new TextDecoder().decode(pt);
 })`;
 
-export function renderViewerPage(id: string, origin = ''): string {
+export function renderViewerPage(id: string, origin = '', objectIds: string[] = []): string {
   // ids are validated by the route already; standalone safety for direct use
-  if (!/^[A-Za-z0-9]+$/.test(id)) {
-    throw new Error('invalid handoff id');
+  if (!/^[A-Za-z0-9]+$/.test(id) || objectIds.some((o) => !/^[a-z0-9_]{1,32}$/.test(o))) {
+    throw new Error('invalid handoff id or object id');
   }
-  return VIEWER_PAGE_HTML.replace(/__API_PATH__/g, `/v1/handoffs/${id}`).replace(
-    /__API_URL__/g,
-    `${origin}/v1/handoffs/${id}`,
-  );
+  const objectLinks = objectIds
+    .map((objectId) => {
+      const label = objectId === 'manifest' ? 'manifest' : `object ${objectId}`;
+      return `<a href="${origin}/v1/handoffs/${id}/files/${objectId}.txt">${label}</a>`;
+    })
+    .join(' \u00b7 ');
+  const objectsSection =
+    objectLinks.length > 0
+      ? `<section aria-label="Agent object endpoints" class="agent-link">Agent object endpoints: ${objectLinks}</section>`
+      : '';
+  return VIEWER_PAGE_HTML.replace(/__API_PATH__/g, `/v1/handoffs/${id}`)
+    .replace(/__API_URL__/g, `${origin}/v1/handoffs/${id}`)
+    .replace(/__OBJECT_LINKS__/g, objectsSection);
 }
 
 const VIEWER_PAGE_HTML = `<!doctype html>
@@ -164,6 +173,7 @@ const VIEWER_PAGE_HTML = `<!doctype html>
   <pre id="content"></pre>
   <div id="meta" class="meta"></div>
   <p class="agent-link">Agent access: <a rel="alternate" type="application/vnd.agent-handoff+json" href="__API_URL__">Agent-readable encrypted JSON</a> · <a rel="alternate" type="text/plain" href="__API_URL__.txt">text envelope</a> at __API_PATH__</p>
+  __OBJECT_LINKS__
 </div>
 <script>
 const bridgeDecrypt = ${DECRYPT_FN_SOURCE};

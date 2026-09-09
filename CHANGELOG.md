@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.2 — 2026-09-09
+
+- `/h/<id>` now server-renders per-object discovery links
+  (`manifest`, `object f1`, `object f2`, … in an "Agent object endpoints"
+  section) so web-retrieval agents can follow real links from the human URL
+  all the way to every object endpoint — no URL derivation, no bare-URL
+  scraping from text. Object ids only; paths stay encrypted
+
 ## 1.3.1 — 2026-09-09
 
 - Manifest file entries now carry agent-discoverable absolute links:

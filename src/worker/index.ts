@@ -68,6 +68,19 @@ async function rateLimit(
   return true;
 }
 
+/** Object ids of a split record (plaintext by design); [] for single-doc / missing. */
+async function listObjectIds(env: Env, id: string): Promise<string[]> {
+  const stored = await env.HANDOFFS.get(DATA_PREFIX + id);
+  if (stored === null) return [];
+  try {
+    const record = JSON.parse(stored) as { layout?: string; objects?: Array<{ object_id: string }> };
+    if (record.layout !== SPLIT_LAYOUT || !Array.isArray(record.objects)) return [];
+    return record.objects.map((o) => o.object_id);
+  } catch {
+    return [];
+  }
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -105,7 +118,8 @@ export default {
     const viewMatch = /^\/h\/([A-Za-z0-9]+)$/.exec(path);
     if (viewMatch && method === 'GET') {
       const id = viewMatch[1] ?? '';
-      return html(renderViewerPage(id, url.origin));
+      const objectIds = await listObjectIds(env, id);
+      return html(renderViewerPage(id, url.origin, objectIds));
     }
 
     if (path === '/new' && method === 'GET') {
