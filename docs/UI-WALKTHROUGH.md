@@ -6,7 +6,7 @@
 
 ### 01 — Landing（`/`）
 - 主标语：**Give AI agents context, not access.**
-- 特性标签：Client-side encrypted · 5-minute expiry · Self-hosted · Zero-knowledge server
+- 特性标签：Client-side encrypted · Burn after reading · Self-hosted · Zero-knowledge
 - 说明段：拖几个文件、写一句话、粘贴生成的链接+密码；服务器只存密文、5 分钟硬删除
 - 按钮：`Create a secure handoff →`（去 /new）、`Status`（/health）
 - 底部：接收方指引（拿到链接的人在 `/h/<id>` 输入密码，密码永远不到服务器）

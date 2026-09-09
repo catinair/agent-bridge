@@ -308,7 +308,7 @@ describe('worker', () => {
     let stored = JSON.parse((await env.HANDOFFS.get('h:' + id)) as string);
     expect(stored.claimed_at).toBeUndefined();
 
-    // first anonymous read claims (60s read lease, hard KV TTL)
+    // first anonymous read claims (lease from READ_LEASE_SECONDS, hard KV TTL)
     const r1 = await worker.fetch(req('/v1/handoffs/' + id), env);
     expect(r1.status).toBe(200);
     stored = JSON.parse((await env.HANDOFFS.get('h:' + id)) as string);

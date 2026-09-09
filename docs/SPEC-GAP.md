@@ -22,7 +22,7 @@
 | 18 `--allow-secrets` 显式豁免（不得自动触发） | ✅ | 必须携带人类理由并回显；Bundle 模式无豁免（直接剔除） |
 | 19 上传令牌与 handoff secret 分离 | ✅ | 一直如此 |
 | 20 令牌记住默认 OFF + Bridge settings 折叠 + 帮助文案 | 🔧 | 本轮修复 |
-| 21–25 Claim / read lease / bundle-level burn / UI 状态 | 🔧 | 本轮实现：首次匿名读取 claim（60s lease，可配）→ 到期 burn；410 + tombstone；`/status` 端点；结果页/查看页显示生命周期 |
+| 21–25 Claim / read lease / bundle-level burn / UI 状态 | 🔧 | 本轮实现：首次 manifest/object 读取即 claim；read lease 默认 180s（可配 30–3600）→ 到期 bundle-level burn（410 + tombstone）；`/status` 端点 + 结果页/查看页生命周期显示 |
 | 26–27 Cloudflare 架构保持；免费额度发布前核对 | 🔧 | 架构保持；README 未写死额度数字，发布前按官方文档核对（待办） |
 | 28–30 CLI 多文件 + 状态输出 | 🔧 | 多文件已实现；输出补 Status 行；`bridge handoff` 以 Agent 工作流（skill）形式落地而非 CLI 子命令（📝 偏差：检索是 Agent 职责） |
 | 31–35 落地页（徽章/三步/footer 降级） | 🔧 | 本轮修复 |

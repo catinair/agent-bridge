@@ -37,7 +37,7 @@ ChatGPT / 浏览器      ←── 拉取密文，本地解密（WebCrypto）
 落实的关键需求：
 
 - **Burn after reading 生命周期**：未领取时 5 分钟 fallback TTL；首次读取即 claim，
-  进入 60 秒读取窗口（可重复读取），窗口结束整体销毁（410 Gone + tombstone）
+  进入 3 分钟读取窗口（READ_LEASE_SECONDS 可配，默认 180s；可重复读取），窗口结束整体销毁（410 Gone + tombstone）
 - **客户端加密**：AES-256-GCM（认证加密），密钥 = PBKDF2-SHA256(secret, salt, 600k 迭代)
 - **客户端加密**：AES-256-GCM（认证加密），密钥 = PBKDF2-SHA256(secret, salt, 600k 迭代)
 - 密码 160 bit CSPRNG，Crockford Base32 展示为 `XXXX-XXXX-…`；**从不出现在 URL / 服务器 / 日志**
