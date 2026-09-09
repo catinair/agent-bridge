@@ -1,5 +1,7 @@
 # Agent Handoff Bridge（中文文档）
 
+![Agent Handoff Bridge — 把项目上下文交给 AI，而不是开放访问。](assets/hero-zh.png)
+
 > **Self-hosted · Zero-knowledge · Burn after reading**
 
 [English](./README.md)

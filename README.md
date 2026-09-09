@@ -7,6 +7,8 @@
 > or any remote agent — without exposing your machine or repository.
 >
 > **Self-hosted · Zero-knowledge · Burn after reading**
+
+![Agent Handoff Bridge — Give AI context, not access.](assets/hero-en.png)
 >
 > [中文文档](./README.zh-CN.md)
 
