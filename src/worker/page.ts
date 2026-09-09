@@ -81,6 +81,7 @@ const VIEWER_PAGE_HTML = `<!doctype html>
 <meta http-equiv="Content-Security-Policy"
       content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src data:">
 <link rel="alternate" type="application/vnd.agent-handoff+json" href="__API_URL__">
+<link rel="alternate" type="text/plain" href="__API_URL__.txt">
 <title>Secure Agent Handoff</title>
 <style>
   :root { color-scheme: dark; }
@@ -132,7 +133,7 @@ const VIEWER_PAGE_HTML = `<!doctype html>
   <div id="msg" class="msg"></div>
   <pre id="content"></pre>
   <div id="meta" class="meta"></div>
-  <p class="agent-link">Agent access: <a rel="alternate" type="application/vnd.agent-handoff+json" href="__API_URL__">Agent-readable encrypted JSON</a> at __API_PATH__</p>
+  <p class="agent-link">Agent access: <a rel="alternate" type="application/vnd.agent-handoff+json" href="__API_URL__">Agent-readable encrypted JSON</a> · <a rel="alternate" type="text/plain" href="__API_URL__.txt">text envelope</a> at __API_PATH__</p>
 </div>
 <script>
 const bridgeDecrypt = ${DECRYPT_FN_SOURCE};

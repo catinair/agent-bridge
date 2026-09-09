@@ -100,6 +100,28 @@ describe('worker', () => {
     expect(pageHtml).toContain('bridgeDecrypt');
   });
 
+  it('serves a text/plain envelope fallback at :id.txt (discovery + retrieval)', async () => {
+    const created = await createHandoff(env);
+    const { id } = (await created.json()) as { id: string };
+
+    const res = await worker.fetch(req('/v1/handoffs/' + id + '.txt'), env);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Type')).toContain('text/plain');
+    expect(res.headers.get('Cache-Control')).toBe('no-store');
+    const text = await res.text();
+    expect(text).toContain('algorithm: AES-256-GCM');
+    expect(text).toContain('kdf: PBKDF2-SHA256');
+    expect(text).toContain('ciphertext: ');
+    expect(text).toContain('expires_at: ');
+    expect(text.toLowerCase()).not.toContain('password:');
+
+    // the viewer page server-renders the text-envelope discovery link
+    const page = await worker.fetch(req('/h/' + id), env);
+    const html = await page.text();
+    expect(html).toContain(`href="https://bridge.example.com/v1/handoffs/${id}.txt"`);
+    expect(html).toContain('text envelope');
+  });
+
   it('returns 404 (not distinguishable from expired) for unknown ids', async () => {
     const res = await worker.fetch(req('/v1/handoffs/AAAAAAAAAAAAAAAAAAAAAAAAAA'), env);
     expect(res.status).toBe(404);

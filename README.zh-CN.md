@@ -199,7 +199,9 @@ size/sha256/content`），远端 Agent 直接阅读原文。二进制或被防�
 GET /v1/handoffs/{id}
 ```
 
-返回信封（服务器永远只看到这些字段）：
+返回信封（服务器永远只看到这些字段）。若抓取层吞掉 JSON body，可用纯文本
+fallback：`GET /v1/handoffs/{id}.txt`（`text/plain`，同样的字段以 key: value
+平铺），链接同样标注在 /h/:id 页面上：
 
 ```json
 {

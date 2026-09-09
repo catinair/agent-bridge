@@ -153,7 +153,10 @@ type:
    href="https://…/v1/handoffs/<id>">Agent-readable encrypted JSON</a>
 ```
 
-`GET /v1/handoffs/<id>` returns the envelope. For bundles
+`GET /v1/handoffs/<id>` returns the envelope as JSON. If a retrieval layer
+swallows raw JSON bodies, the same envelope is also available as flat
+`key: value` text at `GET /v1/handoffs/<id>.txt` (`text/plain`) — linked from
+the `/h/<id>` page as `text envelope`. For bundles
 (`content_type: application/vnd.agent-context-bundle+json`) the decrypted
 plaintext is itself JSON: `{ protocol: "agent-context-bundle", version: 1,
 request: { prompt }, files: [{ path, media_type, size, sha256, content }] }` —

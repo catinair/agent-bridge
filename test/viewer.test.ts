@@ -16,6 +16,7 @@ describe('viewer page', () => {
     expect(html).toContain('href="https://bridge.example.com/v1/handoffs/ABC123TEST">Agent-readable encrypted JSON</a>');
     // <link rel=alternate> with the protocol media type for better-behaved extractors
     expect(html).toContain('<link rel="alternate" type="application/vnd.agent-handoff+json" href="https://bridge.example.com/v1/handoffs/ABC123TEST">');
+    expect(html).toContain('<link rel="alternate" type="text/plain" href="https://bridge.example.com/v1/handoffs/ABC123TEST.txt">');
     expect(html).toContain('type="application/vnd.agent-handoff+json" href="https://bridge.example.com/v1/handoffs/ABC123TEST">Agent-readable');
     expect(html).toContain('bridgeDecrypt');
     expect(html).toContain('Content-Security-Policy');

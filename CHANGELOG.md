@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.1 — 2026-09-09
+
+- Text-envelope fallback: `GET /v1/handoffs/<id>.txt` serves the same
+  ciphertext envelope as flat `key: value` text (`text/plain`), for retrieval
+  environments that swallow raw JSON bodies; discovered via an additional
+  `text envelope` link on `/h/<id>`. Security model unchanged
+- HEAD requests are now handled as GET (body stripped by the runtime)
+
 ## 1.2.0 — 2026-09-09
 
 - **Web UI on the same Worker** — no second app:

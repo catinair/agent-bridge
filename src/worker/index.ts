@@ -66,7 +66,8 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/+$/, '') || '/';
-    const method = request.method;
+    // treat HEAD as GET; the runtime strips the body for HEAD responses
+    const method = request.method === 'HEAD' ? 'GET' : request.method;
 
     if (path === '/health') {
       return json({ ok: true });
@@ -76,10 +77,11 @@ export default {
       return createHandoff(request, env, url);
     }
 
-    const apiMatch = /^\/v1\/handoffs\/([A-Za-z0-9]+)$/.exec(path);
+    const apiMatch = /^\/v1\/handoffs\/([A-Za-z0-9]+)(\.txt)?$/.exec(path);
     if (apiMatch) {
       const id = apiMatch[1] ?? '';
-      if (method === 'GET') return readHandoff(env, id, request);
+      const asText = apiMatch[2] === '.txt';
+      if (method === 'GET') return readHandoff(env, id, request, asText);
       if (method === 'DELETE') return deleteHandoff(request, env, id);
       return error(405, 'method_not_allowed');
     }
@@ -154,7 +156,7 @@ async function createHandoff(request: Request, env: Env, url: URL): Promise<Resp
   });
 }
 
-async function readHandoff(env: Env, id: string, request: Request): Promise<Response> {
+async function readHandoff(env: Env, id: string, request: Request, asText = false): Promise<Response> {
   const perMin = parseInt(env.RATE_LIMIT_PER_MIN ?? '60', 10);
   const limit = Number.isFinite(perMin) && perMin > 0 ? perMin : 60;
   if (!(await rateLimit(env, request, 'read', limit))) {
@@ -179,7 +181,43 @@ async function readHandoff(env: Env, id: string, request: Request): Promise<Resp
     return error(404, 'not_found', 'handoff not found or expired');
   }
 
+  if (asText) {
+    // Plain-text fallback: some web-retrieval layers swallow raw JSON bodies.
+    // Same ciphertext fields as the JSON endpoint, flat key: value lines,
+    // nothing secret added - the password still never touches the server.
+    return new Response(envelopeToText(record), {
+      status: 200,
+      headers: baseHeaders({ 'Content-Type': 'text/plain; charset=utf-8' }),
+    });
+  }
   return json(record);
+}
+
+const TEXT_FIELD_ORDER = [
+  'protocol',
+  'v',
+  'algorithm',
+  'kdf',
+  'iterations',
+  'salt',
+  'iv',
+  'ciphertext',
+  'content_type',
+  'encoding',
+  'secret_encoding',
+  'secret_normalization',
+  'created_at',
+  'expires_at',
+];
+
+function envelopeToText(record: Record<string, unknown>): string {
+  const lines = [
+    '# agent-handoff envelope - ciphertext only; decrypt locally with the password provided separately',
+  ];
+  for (const key of TEXT_FIELD_ORDER) {
+    if (record[key] !== undefined) lines.push(`${key}: ${String(record[key])}`);
+  }
+  return lines.join('\n') + '\n';
 }
 
 async function deleteHandoff(request: Request, env: Env, id: string): Promise<Response> {
