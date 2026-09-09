@@ -5,7 +5,7 @@ import { DEFAULT_CONTENT_TYPE, LIMITS, validateEnvelope } from '../shared/types.
 import { renderViewerPage } from './page.js';
 import { renderCreatePage } from './new-page.js';
 import {
-  AAD_PREFIX,
+  aadStringFor,
   SPLIT_LAYOUT,
   isValidHandoffId,
   type SplitObject,
@@ -399,7 +399,7 @@ async function objectResponse(env: Env, id: string, request: Request, objectId: 
     secret_encoding: record.secret_encoding,
     secret_normalization: record.secret_normalization,
     iv: obj.iv,
-    aad: `${AAD_PREFIX}/${record.id}/file/${objectId}`,
+    aad: aadStringFor(String(record.id), objectId),
     ciphertext: obj.ciphertext,
     content_type: record.content_type,
     created_at: record.created_at,

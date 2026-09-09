@@ -167,8 +167,8 @@ export const CREATE_LIB_SOURCE = `(function bridgeCreateLib() {
   }
 
   function aad(handoffId, objectId) {
-    var domain = objectId === 'manifest' ? 'manifest' : 'file';
-    return new TextEncoder().encode('agent-handoff/v2/' + handoffId + '/' + domain + '/' + objectId);
+    var pathSeg = objectId === 'manifest' ? 'manifest' : 'file/' + objectId;
+    return new TextEncoder().encode('agent-handoff/v2/' + handoffId + '/' + pathSeg);
   }
 
   async function buildSplitHandoff(entries, prompt, notes, origin) {

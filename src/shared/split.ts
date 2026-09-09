@@ -70,11 +70,16 @@ export interface SplitRecord {
   expires_at?: string;
 }
 
+export function aadStringFor(handoffId: string, objectId: string): string {
+  // object-type domain separation: the manifest namespace ends at /manifest,
+  // file objects live under /file/<objectId>
+  return objectId === MANIFEST_OBJECT_ID
+    ? `${AAD_PREFIX}/${handoffId}/manifest`
+    : `${AAD_PREFIX}/${handoffId}/file/${objectId}`;
+}
+
 export function aadFor(handoffId: string, objectId: string): Uint8Array {
-  // object-type domain separation: manifest and file objects live in
-  // different AAD namespaces so ids can never collide across types
-  const domain = objectId === MANIFEST_OBJECT_ID ? 'manifest' : 'file';
-  return new TextEncoder().encode(`${AAD_PREFIX}/${handoffId}/${domain}/${objectId}`);
+  return new TextEncoder().encode(aadStringFor(handoffId, objectId));
 }
 
 export function generateHandoffId(): string {

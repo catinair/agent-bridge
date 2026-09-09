@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.4.1 — 2026-09-09
+
+- **Fix: manifest text envelope declared the wrong AAD** for the manifest
+  object (`.../file/manifest` instead of `.../manifest`) — a consumer
+  following the envelope's self-description could not decrypt. The AAD
+  scheme is now defined once (`aadStringFor`) and used consistently by the
+  encryptor, the viewer decryptor and the envelope renderer
+- **Black-box consumer compatibility test**: inputs are only the human URL
+  and the password; the consumer discovers links from the page HTML, parses
+  the text envelope, and decrypts manifest + files with an independent
+  node:crypto implementation (no project imports) — this is the regression
+  test that caught the mismatch
+
 ## 1.4.0 — 2026-09-09
 
 **Burn-after-reading lifecycle** (per the V3/open-source release spec):

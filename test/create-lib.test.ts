@@ -132,8 +132,8 @@ describe('viewer page', () => {
   });
 
   it('split decryptor uses object-type domain separation in the AAD', () => {
-    expect(BRIDGE_SPLIT_SOURCE).toContain("'manifest' : 'file'");
-    expect(BRIDGE_SPLIT_SOURCE).toContain("agent-handoff/v2/' + record.id + '/' + domain + '/' + objectId");
+    expect(BRIDGE_SPLIT_SOURCE).toContain("? 'manifest' : 'file/' + objectId");
+    expect(BRIDGE_SPLIT_SOURCE).toContain("agent-handoff/v2/' + record.id + '/' + pathSeg");
   });
 
   it('page decrypt source roundtrips ciphertext produced by the shared encoder', async () => {
