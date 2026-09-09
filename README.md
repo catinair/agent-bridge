@@ -6,25 +6,31 @@
 
 [English](./README_EN.md)
 
-> 一个 **5 分钟自毁、客户端加密、服务器零明文、URL 与密钥分离** 的 Agent Context Drop。
-> 用于把本地仓库的 AI 交接上下文（HANDOFF.md）安全地临时递给 ChatGPT 或其他推理 Agent。
+> 一个 **阅后即焚、客户端加密、服务器零明文、URL 与密钥分离** 的 Context Bundle 中转。
+> 把选中的原始文件 + 一句请求，安全交给 ChatGPT 等 AI Agent——无需开放本机或仓库访问。
 
 推荐用 `npm link` 全局安装 CLI，任何目录直接运行 `bridge push ...`；全局配置在
 `~/.config/agent-bridge/config.json`（URL + 上传令牌，0600）。
 
 ```
-本地 Agent 写 HANDOFF.md
-        │
-        ▼
-bridge push          ←── 本地生成 160-bit 密码，AES-256-GCM 加密
-        │
-        │  HTTPS（Bearer 上传令牌）
-        ▼
-Cloudflare Worker ──── Cloudflare KV（只存密文，TTL 300s 自动销毁）
-        │
-        │  URL + 密码（两段分离，由你手动粘给对方）
-        ▼
-ChatGPT / 浏览器      ←── 拉取密文，本地解密（WebCrypto）
+本地 Agent / 你
+      │
+      │ 选择相关上下文
+      ▼
+ Context Bundle
+ Request + 原始文件 + Notes
+      │
+      ▼ 客户端加密（AES-256-GCM，本地生成 160-bit 密码）
+      │
+      │  HTTPS（Bearer 上传令牌）
+      ▼
+自托管 Bridge ──── Cloudflare KV（只存密文）
+      │
+      │  URL + 密码（两段分离，由你手动粘给对方）
+      ▼
+ChatGPT / 浏览器      ←── 按需读取对象，本地解密（WebCrypto）
+      │
+      ▼ 🔥 阅后即焚（未读 5 分钟过期；领取后 3 分钟读取窗口）
 ```
 
 ## 安全模型

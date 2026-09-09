@@ -12,27 +12,37 @@
 >
 > [中文文档](./README.zh-CN.md)
 
-`agent-bridge` is a self-hosted relay for AI-agent handoffs. Your local agent
-packs project context into a markdown file, the CLI encrypts it client-side,
-and the ciphertext sits on **your own** Cloudflare Worker for **5 minutes**.
-You paste a link plus a one-time password into the chat, and the reasoning
-agent fetches and decrypts the document by itself — no plugins, no logins, no
-copy-pasting half your repository.
+`agent-bridge` is a self-hosted relay for **Context Bundles**. You (or your
+local agent) select the relevant original files plus a one-sentence request;
+the CLI or the web page screens and encrypts everything client-side, and the
+ciphertext sits on **your own** Cloudflare Worker. You paste a link plus a
+one-time password into the chat, and the reasoning agent follows links from
+that page: manifest → original files — decrypting each one itself. No
+plugins, no logins, no copy-pasting half your repository.
 
 ```
-local agent writes HANDOFF.md
-        │
-        ▼
-bridge push           ←── 160-bit secret generated locally, AES-256-GCM
-        │
-        │  HTTPS (Bearer upload token)
-        ▼
-Cloudflare Worker ──── Cloudflare KV (ciphertext only, TTL 300s hard delete)
-        │
-        │  URL + password (two separate halves, delivered by you)
-        ▼
-ChatGPT / browser     ←── fetches ciphertext, decrypts locally (WebCrypto)
+local agent / you
+      │
+      │ selects relevant context
+      ▼
+Context Bundle
+Request + Original Files + Notes
+      │
+      ▼ encrypt locally
+      │
+self-hosted bridge    ←── ciphertext only (manifest + per-file objects)
+      │
+      ▼
+ChatGPT / Claude / Gemini
+      │
+      ▼ 🔥 burn after reading
 ```
+
+The core loop is validated end-to-end against real ChatGPT web retrieval: the
+agent opens the human URL, discovers the manifest endpoint from a
+server-rendered `<a>` link, decrypts it with the password from your message,
+then follows per-file links to read the originals — zero extra copying on
+your side.
 
 The core loop is validated end-to-end against real ChatGPT web retrieval: the
 agent opens the human URL, discovers the machine endpoint from a
@@ -145,10 +155,13 @@ bridge push AGENTS.md README.md docs/architecture.md \
 
 The decrypted payload is structured JSON (`files[].path/media_type/size/
 sha256/content`) — the receiver reads it directly, no ZIP, no filesystem.
-Text files only in V1; anything binary or firewall-blocked is **dropped
-unconditionally** (bundle mode has no override — the Bridge decides what must
-never travel). Single-file pushes without `--prompt` keep the original
-HANDOFF-document behavior.
+Text files only in V1. Creation is **fail closed**: binary files and any
+file blocked by the Context Firewall abort the whole handoff with an
+explicit list — a delivered bundle always matches the selection. The CLI
+accepts an explicit recorded human reason (`--allow-secrets "<why>"`) to
+include a firewall-flagged file; the web creator has no bypass.
+Single-file pushes without `--prompt` keep the original HANDOFF-document
+behavior.
 
 `push` reads the file → runs the Context Firewall → generates a 160-bit
 secret → encrypts → uploads → **fetches the public ciphertext back and
@@ -170,15 +183,18 @@ type:
 
 Bundles use the **split transport**: the manifest and every file are encrypted
 as independent objects (same handoff secret, per-object random IV, AES-GCM
-additionalData binding `agent-handoff/v2/<handoffId>/<objectId>` so an
-untrusted relay cannot reorder, rename or splice objects). Agents read the
-manifest first — request + file list with per-object ids — then fetch and
-decrypt exactly the files they need:
+additionalData binding `agent-handoff/v2/<handoffId>/manifest` (manifest
+objects) or `agent-handoff/v2/<handoffId>/file/<objectId>` (file objects) so
+an untrusted relay cannot reorder, rename or splice objects. Agents read the
+manifest first — request + file list with per-object ids and links — then
+fetch and decrypt exactly the files they need:
 
 ```text
-GET /v1/handoffs/<id>                     # full record (all objects)
-GET /v1/handoffs/<id>/manifest.txt        # manifest envelope (text/plain)
-GET /v1/handoffs/<id>/files/<obj>.txt     # file object envelope (text/plain)
+GET /v1/handoffs/<id>                        # full record (all objects)
+GET /v1/handoffs/<id>/manifest.txt           # manifest envelope (text/plain)
+GET /v1/handoffs/<id>/files/<obj>.txt        # file object envelope (text/plain)
+GET /v1/handoffs/<id>/files/<obj>            # file object envelope (JSON)
+GET /v1/handoffs/<id>/status                 # lifecycle status (non-claiming)
 ```
 
 The id is generated client-side so it can be bound into the AAD before
@@ -216,7 +232,9 @@ Decryption (any WebCrypto environment): normalize the secret per
 with PBKDF2-SHA256 (`salt`, `iterations`), then decrypt `ciphertext` with
 AES-256-GCM (`iv`). A wrong password fails GCM authentication — there is no
 oracle. The API responds with `Content-Type: application/json`; 404 covers
-both "unknown" and "expired".
+"unknown" and "unread-expired"; **410 Gone** means the bundle was claimed
+and burned after its read lease. The `aad` field in the object envelope is
+authoritative — bind exactly those bytes during decryption.
 
 Humans get the same page: type the password, the inline JavaScript (no
 external resources, CSP-locked) decrypts locally.
@@ -286,6 +304,29 @@ src/
 ├── cli/          # bridge push / check / config, firewall, clipboard
 └── local-dev/    # node:http harness + in-memory KV (runs the real Worker code)
 ```
+
+## Lifecycle
+
+```text
+Created ──▶ Unclaimed ──▶ Claimed ──▶ Burned
+            │ unread        │ first       │ lease
+            │ fallback      │ ciphertext  │ expires
+            ▼ 5 min         ▼ read        ▼ bundle deleted
+```
+
+- **Unclaimed**: the payload exists for at most 5 minutes (fallback TTL);
+  expire unread and it is removed.
+- **Claimed**: the first ciphertext-object read (manifest or file) claims the
+  handoff and starts a **180-second read lease** (configurable via
+  `READ_LEASE_SECONDS`, 30–3600). Within the lease, the manifest and all
+  file objects can be read repeatedly.
+- **Burned**: when the lease ends the payload is deleted; reads return
+  **410 Gone** (backed by a tombstone, so the state is stable).
+
+Sender-authenticated reads (the CLI's post-upload verification) do not claim.
+Viewing the human page `/h/:id` does not claim either — only ciphertext
+transfers do. The lease is fixed (no sliding extension) so the burn deadline
+is deterministic.
 
 ## Scope
 
