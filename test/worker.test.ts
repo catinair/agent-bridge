@@ -347,6 +347,19 @@ describe('worker', () => {
     expect(body.expires_if_unread_in_seconds).toBeGreaterThan(0);
   });
 
+  it('viewing /h/:id does NOT claim the handoff', async () => {
+    const created = await createHandoff(env);
+    const { id } = (await created.json()) as { id: string };
+    // render the human page (which reads the record to list object links)
+    expect((await worker.fetch(req('/h/' + id), env)).status).toBe(200);
+    const stored = JSON.parse((await env.HANDOFFS.get('h:' + id)) as string);
+    expect(stored.claimed_at).toBeUndefined();
+    // ciphertext transfer endpoints are the only claiming surface
+    await worker.fetch(req('/v1/handoffs/' + id), env);
+    const stored2 = JSON.parse((await env.HANDOFFS.get('h:' + id)) as string);
+    expect(typeof stored2.claimed_at).toBe('string');
+  });
+
   it('returns 404 (not distinguishable from expired) for unknown ids', async () => {
     const res = await worker.fetch(req('/v1/handoffs/AAAAAAAAAAAAAAAAAAAAAAAAAA'), env);
     expect(res.status).toBe(404);

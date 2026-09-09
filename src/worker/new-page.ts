@@ -158,7 +158,11 @@ const createLib = __CREATE_LIB__;
   var elCreate = document.getElementById('create');
   var entries = [];   // { path, text }
   var pendingReads = 0;
+  var blockedCount = 0;
   var timers = [];
+  function refreshCreateState() {
+    elCreate.disabled = pendingReads > 0 || blockedCount > 0;
+  }
 
   function say(text, cls) {
     elMsg.textContent = text;
@@ -238,16 +242,21 @@ const createLib = __CREATE_LIB__;
         row.appendChild(p); row.appendChild(sz); row.appendChild(rm);
       } catch (err) {
         row.className = 'f bad';
-        row.textContent = '✗ ' + f.name + '：' + (err && err.message ? err.message : 'could not read');
+        row.textContent = '✗ ' + f.name + ' — ' + (err && err.message ? err.message : 'could not read');
+        blockedCount++;
       }
       pendingReads--;
-      if (pendingReads === 0) { elCreate.disabled = false; refreshTotals(); }
+      if (pendingReads === 0) refreshCreateState();
     }
     if (pendingReads === 0) elCreate.disabled = false;
   }
 
   elCreate.onclick = async function () {
     if (pendingReads > 0) { say('Still reading files — one moment.', 'err'); return; }
+    if (blockedCount > 0) {
+      say('🛑 Some files were blocked by the firewall. Remove them (×) before creating — the bridge never silently drops selected files.', 'err');
+      return;
+    }
     if (entries.length === 0) { say('Add at least one file first.', 'err'); return; }
     var token = elToken.value.trim();
     if (!token) { say('Upload token required (the same BRIDGE_UPLOAD_TOKEN the CLI uses).', 'err'); return; }

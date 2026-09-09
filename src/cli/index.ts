@@ -250,63 +250,87 @@ function humanSize(bytes: number): string {
 /**
  * Multi-file Context Bundle mode. Original files travel verbatim; the local
  * agent's job is retrieval (which files) + a short request, never
- * interpretation. Firewall-blocked files are dropped unconditionally — the
- * Bridge decides what must never travel, and bundle mode has no override.
+ * interpretation.
+ *
+ * Fail closed: if any selected file is blocked by the Context Firewall
+ * (path policy / credential scan), creation is aborted and the user is told
+ * exactly which files to remove. An override requires an explicit recorded
+ * human reason (--allow-secrets "<why>"); agents must never invent one.
+ * Binary / non-text files are a capability limit and cannot be overridden.
  */
 async function bundlePush(fileList: string[], opts: BundlePushOptions): Promise<void> {
   const { flags } = opts;
   if (fileList.length > BUNDLE_LIMITS.maxFiles) {
     fail(`文件数超过上限（${BUNDLE_LIMITS.maxFiles}）`);
   }
-  if (flags.has('--allow-secrets')) {
-    console.log('ℹ️ Bundle 模式下防火墙拒绝的文件会被直接剔除（无豁免通道），--allow-secrets 未被使用。');
+  const allowReason = flags.has('--allow-secrets') ? String(flags.get('--allow-secrets')).trim() : '';
+  if (allowReason && allowReason.length < 4) {
+    fail('豁免理由太短，请写明实际原因（至少 4 个字符），并由人类确认');
   }
 
   const entries: BundleEntryInput[] = [];
-  const dropped: string[] = [];
+  const overrideBlocked: Array<{ file: string; reason: string }> = [];
+  const hardBlocked: Array<{ file: string; reason: string }> = [];
   let totalBytes = 0;
 
   for (const file of fileList) {
     const bytes = fs.readFileSync(file);
     if (bytes.length > BUNDLE_LIMITS.maxFileBytes) {
-      console.log(`✗ ${file}：${humanSize(bytes.length)} 超过单文件上限 ${humanSize(BUNDLE_LIMITS.maxFileBytes)}，已剔除`);
-      dropped.push(file);
+      hardBlocked.push({ file, reason: `${humanSize(bytes.length)} 超过单文件上限 ${humanSize(BUNDLE_LIMITS.maxFileBytes)}` });
       continue;
     }
     if (looksBinary(bytes)) {
-      console.log(`✗ ${file}：二进制文件（Bundle V1 仅支持纯文本），已剔除`);
-      dropped.push(file);
+      hardBlocked.push({ file, reason: '二进制文件（Bundle V1 仅支持纯文本）' });
       continue;
     }
     if (!isTextPath(file)) {
-      console.log(`✗ ${file}：非文本扩展名（Bundle V1 仅支持纯文本），已剔除`);
-      dropped.push(file);
+      hardBlocked.push({ file, reason: '非文本扩展名（Bundle V1 仅支持纯文本）' });
       continue;
     }
     const text = bytes.toString('utf8');
-    const bPath = bundlePathFor(file);
     const report = runFirewall(file, text);
     if (report.blocked) {
-      console.log(`✗ ${file}：被 Context Firewall 拒绝，已剔除`);
-      for (const f of report.contentFindings.filter((x) => x.severity === 'block').slice(0, 5)) {
-        console.log(`    第 ${f.line} 行：${f.rule}`);
-      }
-      if (report.pathFinding) console.log(`    ${report.pathFinding.rule}`);
-      dropped.push(file);
+      const first = report.pathFinding?.rule ??
+        report.contentFindings.find((f) => f.severity === 'block')?.rule ??
+        'firewall';
+      overrideBlocked.push({ file, reason: first });
+      console.log(`✗ ${file}：被 Context Firewall 拒绝（${first}）`);
       continue;
     }
     const warns = report.contentFindings.filter((x) => x.severity === 'warn');
-    console.log(`✓ ${bPath}（${humanSize(bytes.length)}）${warns.length > 0 ? ` ⚠️ ${warns.length} 条告警` : ''}`);
-    entries.push({ path: bPath, text });
+    console.log(`✓ ${bundlePathFor(file)}（${humanSize(bytes.length)}）${warns.length > 0 ? ` ⚠️ ${warns.length} 条告警` : ''}`);
+    entries.push({ path: bundlePathFor(file), text });
     totalBytes += bytes.length;
   }
 
-  if (entries.length === 0) fail('所有文件都被剔除，没有可推送的内容');
+  if (overrideBlocked.length > 0) {
+    if (!allowReason) {
+      console.error('\n🛑 以下文件被 Context Firewall 拒绝，本次创建已阻止（fail closed）：');
+      for (const b of overrideBlocked) console.error(`   ${b.file}：${b.reason}`);
+      console.error('\n请将这些文件从选择中移除后重试；确认为误报时可用');
+      console.error('  --allow-secrets "<人类确认的理由>"  覆盖（理由会记录在输出中）。');
+      console.error('Agent 不得自行编造理由绕过。');
+      process.exit(2);
+    }
+    console.log(`⚠️  --allow-secrets 豁免已启用（理由：${allowReason}），被拒文件将包含在 Bundle 中：`);
+    for (const b of overrideBlocked) console.log(`   ${b.file}：${b.reason}`);
+    for (const b of overrideBlocked) {
+      const text = fs.readFileSync(b.file, 'utf8');
+      entries.push({ path: bundlePathFor(b.file), text });
+      totalBytes += Buffer.byteLength(text, 'utf8');
+    }
+  }
+
+  if (hardBlocked.length > 0) {
+    console.error('\n🛑 以下文件无法通过 Bundle 传输（V1 仅支持文本，此项不可覆盖）：');
+    for (const b of hardBlocked) console.error(`   ${b.file}：${b.reason}`);
+    console.error('请将它们从选择中移除后重试。');
+    process.exit(2);
+  }
+
+  if (entries.length === 0) fail('没有可推送的文件');
   if (totalBytes > LIMITS.maxBundleBytes) {
     fail(`Bundle 总大小 ${totalBytes} 字节超过上限 ${LIMITS.maxBundleBytes}`);
-  }
-  if (dropped.length > 0) {
-    console.log(`🛡 已剔除 ${dropped.length} 个文件：${dropped.join('、')}`);
   }
 
   const cfg = loadBridgeConfig();
@@ -326,13 +350,13 @@ async function bundlePush(fileList: string[], opts: BundlePushOptions): Promise<
     ? parseInt(String(flags.get('--iterations')), 10)
     : DEFAULT_ITERATIONS;
   if (!Number.isInteger(iterations)) fail('--iterations 必须是整数');
+  const origin = cfg.baseUrl.replace(/\/+$/, '');
 
   // split transport: manifest + one encrypted object per file
   const handoffId = generateHandoffId();
   const secret = generateSecret();
   const manifestFiles: SplitManifestFile[] = [];
   const fileTexts: Array<{ objectId: string; text: string }> = [];
-  const origin = cfg.baseUrl.replace(/\/+$/, '');
   for (let i = 0; i < entries.length; i++) {
     const e = entries[i] as BundleEntryInput;
     manifestFiles.push({
@@ -414,8 +438,12 @@ async function bundlePush(fileList: string[], opts: BundlePushOptions): Promise<
     `（${Math.round(ttl / 60)} 分钟内有效）`,
   ].join('\n');
 
+  const overrideBanner = overrideBlocked.length > 0
+    ? `\n⚠️⚠️  本次包含 ${overrideBlocked.length} 个防火墙拦截文件（豁免理由：${allowReason}）——请人工确认确实应当传输`
+    : '';
+
   console.log(`
-Context Bundle ready ✅（${manifestFiles.length} 个文件独立加密，共 ${humanSize(totalBytes)}，已回读逐文件校验）
+Context Bundle ready ✅（${manifestFiles.length} 个文件独立加密，共 ${humanSize(totalBytes)}，已回读逐文件校验）${overrideBanner}
 Request: ${opts.prompt || '（未提供——建议附一句你想让对方解决什么）'}
 Status:   Unclaimed（首次被读取即 claim，进入 3 分钟读取窗口后销毁）
 URL:      ${created.url}

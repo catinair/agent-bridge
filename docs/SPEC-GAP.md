@@ -48,6 +48,9 @@
 4. **`bridge handoff` 子命令**：以 Agent 工作流（skill 文档）形式存在，CLI 不内置自动检索。
 5. **read lease**：默认 **180 秒（3 分钟）**，经 `READ_LEASE_SECONDS` 可配（30–3600），
    不做滑动延长——保证确定的 burn 期限。60s 版本经真实 ChatGPT 多文件消费实测过短。
+6. **Bundle 防火墙 fail closed**：被拒文件中止整次创建并明确列出（不静默剔除后发送），
+   与"Bundle 必须与用户所选内容一致"的产品语义对齐；CLI 单文件模式保留
+   `--allow-secrets` 人类显式豁免，Web 创建页无绕过入口。
 
 ## P1 遗留（不阻塞开源）
 

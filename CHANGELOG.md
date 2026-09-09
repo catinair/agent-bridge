@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.4.3 — 2026-09-09
+
+- **Context Firewall is now fail closed in bundle mode**: any blocked file
+  aborts the whole creation with an explicit list instead of being silently
+  dropped — the delivered bundle always matches the user's selection.
+  `--allow-secrets "<reason>"` remains the explicit CLI-only escape hatch
+  (recorded in the output); the web creator has no bypass and disables
+  creation while blocked files are present
+- `/h/:id` viewing explicitly never claims (locked by test) — only
+  ciphertext transfer reads trigger the claim/lease/burn lifecycle
+
 ## 1.4.2 — 2026-09-09
 
 - **Read lease widened to 3 minutes** (default 180s, configurable 30–3600 via
